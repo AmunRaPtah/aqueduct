@@ -1,0 +1,246 @@
+"""Document pipeline for full-text corpora (bronze -> silver -> gold).
+
+  store_documents   landing-zone XML + manifest  -> documents_raw   (bronze)
+  process_documents documents_raw                -> doc_sections    (silver)
+  chunk_documents   doc_sections                 -> doc_chunks      (gold)
+
+Chunks are search/embedding-ready: bounded word windows that never cross a
+section boundary, each carrying its source section heading.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import duckdb
+
+from . import config, jats
+from .sources import arxiv
+from .storage import connect
+
+CHUNK_WORDS = 220   # target words per chunk
+CHUNK_OVERLAP = 40  # words shared between consecutive chunks
+
+# Each source lands a different raw format; parse it back with the right parser.
+PARSERS = {
+    "europepmc": jats.parse_jats,  # JATS-XML
+    "arxiv": arxiv.parse_atom,     # Atom XML
+}
+
+
+# --------------------------------------------------------------------------- #
+# bronze
+# --------------------------------------------------------------------------- #
+def _iter_manifests() -> list[Path]:
+    """All source manifests under the landing zone (one per connector)."""
+    return sorted(config.RAW_DIR.glob("*/manifest.jsonl"))
+
+
+def store_documents(con: duckdb.DuckDBPyConnection | None = None) -> int:
+    """Load landing-zone XML + metadata into `documents_raw`. Returns row count."""
+    owns = con is None
+    con = con or connect()
+    try:
+        con.execute(
+            """
+            CREATE OR REPLACE TABLE documents_raw (
+                pmcid TEXT PRIMARY KEY, pmid TEXT, doi TEXT, title TEXT,
+                journal TEXT, pub_year INTEGER, authors TEXT, source TEXT,
+                query TEXT, fetched_at TEXT, has_body BOOLEAN,
+                abstract TEXT, mesh TEXT, keywords TEXT, grants TEXT, cited_by INTEGER,
+                raw_xml TEXT
+            )
+            """
+        )
+        rows = 0
+        for manifest in _iter_manifests():
+            for line in manifest.read_text().splitlines():
+                if not line.strip():
+                    continue
+                rec = json.loads(line)
+                xml_path = Path(rec["xml_file"])
+                if not xml_path.exists():
+                    continue
+                year = rec.get("pub_year")
+                cited = rec.get("cited_by")
+                con.execute(
+                    "INSERT OR REPLACE INTO documents_raw VALUES "
+                    "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    [
+                        rec["pmcid"], rec.get("pmid"), rec.get("doi"), rec.get("title"),
+                        rec.get("journal"), int(year) if year else None,
+                        rec.get("authors"), rec.get("source"), rec.get("query"),
+                        rec.get("fetched_at"), rec.get("has_body"),
+                        rec.get("abstract"), rec.get("mesh"), rec.get("keywords"),
+                        rec.get("grants"), int(cited) if cited is not None else None,
+                        xml_path.read_text(encoding="utf-8"),
+                    ],
+                )
+                rows += 1
+        total = con.execute("SELECT count(*) FROM documents_raw").fetchone()[0]
+        print(f"[store]   {rows} docs loaded -> documents_raw (bronze, {total} total)")
+        return rows
+    finally:
+        if owns:
+            con.close()
+
+
+# --------------------------------------------------------------------------- #
+# silver
+# --------------------------------------------------------------------------- #
+def process_documents(con: duckdb.DuckDBPyConnection | None = None) -> int:
+    """Parse raw XML into `doc_sections`. Returns the section count."""
+    owns = con is None
+    con = con or connect()
+    try:
+        con.execute(
+            """
+            CREATE OR REPLACE TABLE doc_sections (
+                pmcid TEXT, ordinal INTEGER, sec_type TEXT,
+                sec_title TEXT, text TEXT, n_words INTEGER
+            )
+            """
+        )
+        docs = con.execute("SELECT pmcid, source, raw_xml FROM documents_raw").fetchall()
+        n_sec = 0
+        for pmcid, source, xml in docs:
+            parse = PARSERS.get(source, jats.parse_jats)
+            parsed = parse(xml)
+            for ordinal, sec in enumerate(parsed["sections"]):
+                con.execute(
+                    "INSERT INTO doc_sections VALUES (?,?,?,?,?,?)",
+                    [pmcid, ordinal, sec["sec_type"], sec["sec_title"],
+                     sec["text"], len(sec["text"].split())],
+                )
+                n_sec += 1
+        print(f"[process] {len(docs)} docs -> {n_sec} sections (silver)")
+        return n_sec
+    finally:
+        if owns:
+            con.close()
+
+
+# --------------------------------------------------------------------------- #
+# gold
+# --------------------------------------------------------------------------- #
+def _chunk(words: list[str], size: int, overlap: int):
+    step = max(1, size - overlap)
+    for i in range(0, len(words), step):
+        window = words[i : i + size]
+        if window:
+            yield window
+        if i + size >= len(words):
+            break
+
+
+def chunk_documents(con: duckdb.DuckDBPyConnection | None = None) -> int:
+    """Split abstract + body sections into `doc_chunks`. Returns chunk count."""
+    owns = con is None
+    con = con or connect()
+    try:
+        con.execute(
+            """
+            CREATE OR REPLACE TABLE doc_chunks (
+                pmcid TEXT, chunk_id INTEGER, sec_type TEXT,
+                sec_title TEXT, text TEXT, n_words INTEGER
+            )
+            """
+        )
+        sections = con.execute(
+            """
+            SELECT pmcid, sec_type, sec_title, text
+            FROM doc_sections
+            WHERE sec_type IN ('abstract', 'body')
+            ORDER BY pmcid, ordinal
+            """
+        ).fetchall()
+
+        counters: dict[str, int] = {}
+        n_chunks = 0
+        for pmcid, sec_type, sec_title, text in sections:
+            for window in _chunk(text.split(), CHUNK_WORDS, CHUNK_OVERLAP):
+                cid = counters.get(pmcid, 0)
+                counters[pmcid] = cid + 1
+                con.execute(
+                    "INSERT INTO doc_chunks VALUES (?,?,?,?,?,?)",
+                    [pmcid, cid, sec_type, sec_title, " ".join(window), len(window)],
+                )
+                n_chunks += 1
+        print(f"[chunk]   {n_chunks} chunks -> doc_chunks (gold)")
+        return n_chunks
+    finally:
+        if owns:
+            con.close()
+
+
+# --------------------------------------------------------------------------- #
+# analytics + search
+# --------------------------------------------------------------------------- #
+def report(con: duckdb.DuckDBPyConnection | None = None) -> None:
+    owns = con is None
+    con = con or connect()
+    try:
+        d = con.execute(
+            "SELECT count(*), count(*) FILTER (WHERE has_body), "
+            "count(DISTINCT journal) FROM documents_raw"
+        ).fetchone()
+        s = con.execute("SELECT count(*), sum(n_words) FROM doc_sections").fetchone()
+        c = con.execute("SELECT count(*) FROM doc_chunks").fetchone()[0]
+        print("\n========== Aqueduct corpus ==========\n")
+        print(f"Documents: {d[0]}  (full-text: {d[1]})   Journals: {d[2]}")
+        print(f"Sections:  {s[0]}   Words: {s[1] or 0:,}   Chunks: {c}\n")
+        print("-- Documents by year --")
+        for yr, n, w in con.execute(
+            "SELECT pub_year, count(*), sum(LENGTH(raw_xml)) FROM documents_raw "
+            "GROUP BY pub_year ORDER BY pub_year DESC"
+        ).fetchall():
+            print(f"  {yr}: {n} docs")
+        print("\n-- Top journals --")
+        for jr, n in con.execute(
+            "SELECT journal, count(*) FROM documents_raw GROUP BY journal "
+            "ORDER BY count(*) DESC LIMIT 5"
+        ).fetchall():
+            print(f"  {n:3}  {jr}")
+        # MeSH terms (Europe PMC) — exploded from the ';'-joined column
+        mesh = con.execute(
+            """
+            SELECT trim(term) AS t, count(*) AS n
+            FROM documents_raw, UNNEST(string_split(mesh, ';')) AS u(term)
+            WHERE mesh IS NOT NULL AND trim(term) <> ''
+            GROUP BY t ORDER BY n DESC LIMIT 8
+            """
+        ).fetchall()
+        if mesh:
+            print("\n-- Top MeSH terms --")
+            for term, n in mesh:
+                print(f"  {n:3}  {term}")
+        print("\n=====================================\n")
+    finally:
+        if owns:
+            con.close()
+
+
+def search(term: str, k: int = 8, con: duckdb.DuckDBPyConnection | None = None) -> None:
+    """Lexical full-text search over chunks (placeholder for vector search)."""
+    owns = con is None
+    con = con or connect()
+    try:
+        rows = con.execute(
+            """
+            SELECT d.pmcid, d.title, c.sec_title, c.text
+            FROM doc_chunks c JOIN documents_raw d USING (pmcid)
+            WHERE c.text ILIKE '%' || ? || '%'
+            LIMIT ?
+            """,
+            [term, k],
+        ).fetchall()
+        print(f"\n{len(rows)} chunk hits for {term!r}:\n")
+        for pmcid, title, sec_title, text in rows:
+            lo = text.lower().find(term.lower())
+            snip = text[max(0, lo - 60) : lo + 120].strip()
+            print(f"• {pmcid} — {(title or '')[:55]}")
+            print(f"    [{sec_title or 'body'}] …{snip}…\n")
+    finally:
+        if owns:
+            con.close()

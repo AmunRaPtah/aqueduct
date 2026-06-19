@@ -1,0 +1,22 @@
+[project]
+name = "aqueduct"
+version = "0.1.0"
+description = "A minimal end-to-end data pipeline: ingest, store, process, analyze."
+requires-python = ">=3.10"
+dependencies = [
+    "duckdb>=1.0",
+]
+
+[project.scripts]
+aqueduct = "aqueduct.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "tests"]
+testpaths = ["tests"]

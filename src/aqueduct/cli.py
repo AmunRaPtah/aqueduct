@@ -1,0 +1,118 @@
+"""Command-line entrypoint: `python -m aqueduct <command>`."""
+
+from __future__ import annotations
+
+import argparse
+
+from . import analytics, corpus, datasets, documents, ingest, links, pipeline, process, storage
+from .sources import arxiv, chembl, clinicaltrials, europepmc, pdb, uniprot
+
+INGESTORS = {"europepmc": europepmc.ingest, "arxiv": arxiv.ingest}
+DATA_INGESTORS = {
+    "chembl": chembl.ingest,
+    "clinicaltrials": clinicaltrials.ingest,
+    "uniprot": uniprot.ingest,
+    "pdb": pdb.ingest,
+}
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="aqueduct", description=__doc__)
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    # --- real corpus pipeline (Europe PMC full text) ---
+    c_run = sub.add_parser("corpus", help="full-text corpus pipeline (Europe PMC)")
+    c_sub = c_run.add_subparsers(dest="corpus_cmd", required=True)
+
+    cr = c_sub.add_parser("run", help="fetch + build + report end-to-end")
+    cr.add_argument("--query", required=True, help="query, e.g. 'CRISPR gene therapy'")
+    cr.add_argument("--limit", type=int, default=25, help="max articles")
+    cr.add_argument("--source", choices=list(INGESTORS), default="europepmc")
+
+    cf = c_sub.add_parser("fetch", help="ingest full text into the landing zone")
+    cf.add_argument("--query", required=True)
+    cf.add_argument("--limit", type=int, default=25)
+    cf.add_argument("--source", choices=list(INGESTORS), default="europepmc")
+
+    c_sub.add_parser("build", help="store + process + chunk the landing zone")
+    c_sub.add_parser("report", help="print the corpus report")
+
+    cq = c_sub.add_parser("search", help="lexical search over chunks")
+    cq.add_argument("term")
+    cq.add_argument("-k", type=int, default=8)
+
+    # --- structured datasets (ChEMBL, ...) ---
+    d_grp = sub.add_parser("data", help="structured datasets (ChEMBL, clinical, ...)")
+    d_sub = d_grp.add_subparsers(dest="data_cmd", required=True)
+    df = d_sub.add_parser("fetch", help="ingest a structured source")
+    df.add_argument("--source", choices=list(DATA_INGESTORS), default="chembl")
+    df.add_argument("--query", default="", help="source query (ignored for pdb)")
+    df.add_argument("--limit", type=int, default=100)
+    d_sub.add_parser("build", help="load landing-zone records into typed tables")
+    d_sub.add_parser("report", help="print the structured-data report")
+
+    # --- cross-source entity links (drug <-> trial <-> paper) ---
+    l_grp = sub.add_parser("links", help="cross-source entity links")
+    l_sub = l_grp.add_subparsers(dest="links_cmd", required=True)
+    l_sub.add_parser("build", help="build the drug/trial/paper/protein link graph")
+    l_sub.add_parser("report", help="best-connected drugs across sources")
+    le = l_sub.add_parser("explore", help="show trials + papers + targets linked to a drug")
+    le.add_argument("drug")
+    lp = l_sub.add_parser("protein", help="show drugs + structures + papers linked to a gene")
+    lp.add_argument("gene")
+
+    # --- synthetic events demo (original scaffold) ---
+    p_run = sub.add_parser("run", help="[demo] synthetic events pipeline")
+    p_run.add_argument("--events", type=int, default=2000)
+    p_run.add_argument("--seed", type=int, default=42)
+    p_ing = sub.add_parser("ingest", help="[demo] ingest synthetic events")
+    p_ing.add_argument("--events", type=int, default=2000)
+    p_ing.add_argument("--seed", type=int, default=42)
+    sub.add_parser("store", help="[demo] load events into bronze")
+    sub.add_parser("process", help="[demo] build event silver + gold")
+    sub.add_parser("query", help="[demo] print the events report")
+
+    args = parser.parse_args(argv)
+
+    if args.command == "corpus":
+        if args.corpus_cmd == "run":
+            corpus.run(args.query, limit=args.limit, source=args.source)
+        elif args.corpus_cmd == "fetch":
+            INGESTORS[args.source](args.query, limit=args.limit)
+        elif args.corpus_cmd == "build":
+            corpus.build()
+        elif args.corpus_cmd == "report":
+            documents.report()
+        elif args.corpus_cmd == "search":
+            documents.search(args.term, k=args.k)
+    elif args.command == "data":
+        if args.data_cmd == "fetch":
+            DATA_INGESTORS[args.source](args.query, limit=args.limit)
+        elif args.data_cmd == "build":
+            datasets.build()
+        elif args.data_cmd == "report":
+            datasets.report()
+    elif args.command == "links":
+        if args.links_cmd == "build":
+            links.build()
+        elif args.links_cmd == "report":
+            links.report()
+        elif args.links_cmd == "explore":
+            links.explore(args.drug)
+        elif args.links_cmd == "protein":
+            links.explore_protein(args.gene)
+    elif args.command == "run":
+        pipeline.run(n_events=args.events, seed=args.seed)
+    elif args.command == "ingest":
+        ingest.ingest(n_events=args.events, seed=args.seed)
+    elif args.command == "store":
+        storage.store()
+    elif args.command == "process":
+        process.process()
+    elif args.command == "query":
+        analytics.report()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
