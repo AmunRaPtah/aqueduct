@@ -23,6 +23,8 @@ DATASETS = {
     "clinicaltrials": [("clinicaltrials/trials.jsonl", "clinical_trials")],
     "uniprot": [("uniprot/proteins.jsonl", "uniprot_proteins")],
     "pdb": [("pdb/structures.jsonl", "pdb_structures")],
+    "pubchem": [("pubchem/compounds.jsonl", "pubchem_compounds")],
+    "ensembl": [("ensembl/genes.jsonl", "ensembl_genes")],
 }
 
 
@@ -126,6 +128,26 @@ def report(con: duckdb.DuckDBPyConnection | None = None) -> None:
                 "WHERE gene IS NOT NULL LIMIT 6"
             ).fetchall():
                 print(f"     {str(gene):10} {str(org)[:22]:22} {ln}aa  chembl={chembl}")
+            print()
+
+        if _has_table(con, "pubchem_compounds"):
+            shown = True
+            n = con.execute("SELECT count(*) FROM pubchem_compounds").fetchone()[0]
+            print(f"pubchem_compounds: {n} rows")
+            for cid, formula, mw in con.execute(
+                "SELECT cid, molecular_formula, round(mw,1) FROM pubchem_compounds LIMIT 5"
+            ).fetchall():
+                print(f"     CID {cid}  {str(formula):16} {mw}")
+            print()
+
+        if _has_table(con, "ensembl_genes"):
+            shown = True
+            n = con.execute("SELECT count(*) FROM ensembl_genes").fetchone()[0]
+            print(f"ensembl_genes: {n} rows")
+            for gene, eid, chrom, bt in con.execute(
+                "SELECT gene, ensembl_id, chromosome, biotype FROM ensembl_genes LIMIT 5"
+            ).fetchall():
+                print(f"     {str(gene):10} {eid}  chr{chrom}  {bt}")
             print()
 
         if not shown:

@@ -286,11 +286,37 @@ def build(con: duckdb.DuckDBPyConnection | None = None) -> dict[str, int]:
                     """
                 )
 
+        # ---- cheminformatics + genomics arm ----
+        con.execute("CREATE OR REPLACE TABLE link_drug_pubchem "
+                    "(drug_norm TEXT, chembl_id TEXT, cid BIGINT, inchi_key TEXT)")
+        if "pubchem_compounds" in tables and "chembl_molecules" in tables:
+            con.execute(
+                """
+                INSERT INTO link_drug_pubchem
+                SELECT DISTINCT e.drug_norm, e.chembl_id, p.cid, p.inchi_key
+                FROM entity_drug_molecules e
+                JOIN chembl_molecules m ON e.chembl_id = m.chembl_id
+                JOIN pubchem_compounds p ON m.inchi_key = p.inchi_key
+                WHERE m.inchi_key IS NOT NULL
+                """
+            )
+        con.execute("CREATE OR REPLACE TABLE link_protein_gene "
+                    "(accession TEXT, gene TEXT, ensembl_id TEXT)")
+        if "ensembl_genes" in tables and have_prot:  # entity_proteins built above
+            con.execute(
+                """
+                INSERT INTO link_protein_gene
+                SELECT DISTINCT p.accession, p.gene, g.ensembl_id
+                FROM entity_proteins p JOIN ensembl_genes g ON p.gene = g.gene
+                """
+            )
+
         counts = {
             t: con.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
             for t in ("entity_drugs", "entity_drug_names", "link_drug_trial",
                       "link_drug_document", "link_trial_document",
-                      "link_drug_protein", "link_protein_structure", "link_protein_document")
+                      "link_drug_protein", "link_protein_structure", "link_protein_document",
+                      "link_drug_pubchem", "link_protein_gene")
         }
         strong = con.execute(
             "SELECT count(*) FROM link_drug_document WHERE confidence='strong'"
@@ -305,6 +331,10 @@ def build(con: duckdb.DuckDBPyConnection | None = None) -> dict[str, int]:
             f"[links]   drug-protein={counts['link_drug_protein']}  "
             f"protein-structure={counts['link_protein_structure']}  "
             f"protein-doc={counts['link_protein_document']}"
+        )
+        print(
+            f"[links]   drug-pubchem={counts['link_drug_pubchem']}  "
+            f"protein-gene={counts['link_protein_gene']}"
         )
         return counts
     finally:

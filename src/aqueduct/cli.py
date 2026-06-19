@@ -6,7 +6,8 @@ import argparse
 
 from . import (analytics, corpus, datasets, discover, documents, embeddings, ingest,
                links, pipeline, process, storage)
-from .sources import arxiv, chembl, clinicaltrials, europepmc, pdb, uniprot
+from .sources import (arxiv, chembl, clinicaltrials, ensembl, europepmc, pdb,
+                      pubchem, uniprot)
 
 INGESTORS = {"europepmc": europepmc.ingest, "arxiv": arxiv.ingest}
 DATA_INGESTORS = {
@@ -14,6 +15,8 @@ DATA_INGESTORS = {
     "clinicaltrials": clinicaltrials.ingest,
     "uniprot": uniprot.ingest,
     "pdb": pdb.ingest,
+    "pubchem": pubchem.ingest,
+    "ensembl": ensembl.ingest,
 }
 
 

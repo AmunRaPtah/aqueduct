@@ -76,7 +76,12 @@ tables per source; cross-source links are a later step).
 | `clinicaltrials` | interventions / therapeutics | `clinical_trials` |
 | `uniprot` | proteins / drug targets | `uniprot_proteins` |
 | `pdb` | protein structures (enriches UniProt refs) | `pdb_structures` |
-| _next_ | PubChem, Ensembl/genomics | _planned_ |
+| `pubchem` | compounds / cheminformatics | `pubchem_compounds` |
+| `ensembl` | genomics (gene location/biotype) | `ensembl_genes` |
+
+`data fetch --source ensembl` with no `--query` enriches the genes already in the UniProt
+landing zone. Graph links: `link_drug_pubchem` (ChEMBL ↔ PubChem by InChIKey) and
+`link_protein_gene` (protein ↔ Ensembl gene by symbol).
 
 `data fetch --source pdb` ignores `--query` — it enriches the structures referenced by
 whatever UniProt proteins are already in the landing zone.
