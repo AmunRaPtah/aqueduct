@@ -35,6 +35,35 @@ class _StubEmbedder(embeddings.Embedder):
         return cls(dim=state["dim"])
 
 
+def test_default_backend_matches_availability():
+    import importlib.util
+    expected = "st" if importlib.util.find_spec("sentence_transformers") else "lsa"
+    assert embeddings.default_backend() == expected
+
+
+def test_st_model_cache_is_reused(monkeypatch):
+    # populate the process cache; _ensure must reuse it without importing torch
+    sentinel = object()
+    monkeypatch.setitem(embeddings._ST_MODELS, "fake-model", sentinel)
+    emb = embeddings.SentenceTransformerEmbedder(model="fake-model")
+    emb._ensure()
+    assert emb._model is sentinel
+
+
+def test_auto_backend_resolves_in_build_index(con, env, monkeypatch):
+    import json
+    import seed
+    from aqueduct import corpus
+    # force 'lsa' so the test is deterministic and never loads a transformer
+    monkeypatch.setattr(embeddings, "default_backend", lambda: "lsa")
+    seed.seed_document("PMC1", abstract="alpha beta " * 4,
+                       sections=[("B", "alpha beta gamma " * 6)])
+    corpus.build(con)
+    embeddings.build_index(con, backend="auto", dims=4)
+    meta = json.loads((env / "lsa_model.json").read_text())
+    assert meta["backend"] == "lsa"
+
+
 def test_registry_dispatch_and_unknown():
     assert "lsa" in embeddings.BACKENDS and "st" in embeddings.BACKENDS
     assert isinstance(embeddings.make_embedder("lsa", dims=4), embeddings.LsaEmbedder)

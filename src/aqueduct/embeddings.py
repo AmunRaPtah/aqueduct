@@ -11,6 +11,7 @@ search code is backend-agnostic.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
 
@@ -18,6 +19,15 @@ import numpy as np
 
 from . import config
 from .storage import connect
+
+# process-wide cache of loaded transformer models (keyed by model name), so
+# build_index and rank in the same process share one load instead of two.
+_ST_MODELS: dict[str, object] = {}
+
+
+def default_backend() -> str:
+    """'st' when sentence-transformers is importable, else the keyless 'lsa'."""
+    return "st" if importlib.util.find_spec("sentence_transformers") else "lsa"
 
 _TOKEN = re.compile(r"[a-z][a-z0-9]{2,}")  # words of >=3 chars
 _STOP = {
@@ -142,14 +152,20 @@ class SentenceTransformerEmbedder(Embedder):
         self._model = None
 
     def _ensure(self):
-        if self._model is None:
-            try:
-                from sentence_transformers import SentenceTransformer
-            except ImportError as e:  # pragma: no cover - environment dependent
-                raise RuntimeError(
-                    "the 'st' backend needs sentence-transformers: pip install -e '.[st]'"
-                ) from e
-            self._model = SentenceTransformer(self.model_name)
+        if self._model is not None:
+            return
+        cached = _ST_MODELS.get(self.model_name)
+        if cached is not None:
+            self._model = cached
+            return
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError as e:  # pragma: no cover - environment dependent
+            raise RuntimeError(
+                "the 'st' backend needs sentence-transformers: pip install -e '.[st]'"
+            ) from e
+        self._model = SentenceTransformer(self.model_name)
+        _ST_MODELS[self.model_name] = self._model  # cache for reuse this process
 
     def transform(self, texts: list[str]) -> np.ndarray:
         self._ensure()
@@ -187,9 +203,14 @@ def _index_paths():
     return (config.DATA_DIR / "lsa_model.json", config.DATA_DIR / "chunk_index.npz")
 
 
-def build_index(con=None, backend: str = "lsa", dims: int = 128,
+def build_index(con=None, backend: str = "auto", dims: int = 128,
                 model: str = "all-MiniLM-L6-v2") -> int:
-    """Embed every chunk with the chosen backend and persist the index."""
+    """Embed every chunk with the chosen backend and persist the index.
+
+    backend='auto' picks 'st' when sentence-transformers is installed, else 'lsa'.
+    """
+    if backend in (None, "auto"):
+        backend = default_backend()
     owns = con is None
     con = con or connect()
     try:

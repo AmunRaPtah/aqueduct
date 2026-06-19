@@ -48,8 +48,8 @@ def main(argv: list[str] | None = None) -> int:
     cq.add_argument("-k", type=int, default=8)
 
     ci = c_sub.add_parser("index", help="build the semantic index over chunks")
-    ci.add_argument("--backend", choices=["lsa", "st"], default="lsa",
-                    help="lsa (keyless, default) or st (sentence-transformers)")
+    ci.add_argument("--backend", choices=["auto", "lsa", "st"], default="auto",
+                    help="auto (st if installed, else lsa), or force lsa/st")
     ci.add_argument("--dims", type=int, default=128, help="LSA dimensions")
     ci.add_argument("--model", default="all-MiniLM-L6-v2", help="sentence-transformers model")
     cs = c_sub.add_parser("semantic", help="semantic search over chunks")

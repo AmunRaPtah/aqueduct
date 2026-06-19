@@ -174,13 +174,17 @@ which **backend** produced it, so search reconstructs the right embedder.
 
 | `--backend` | What | Deps |
 |-------------|------|------|
-| `lsa` (default) | TF-IDF + truncated SVD | keyless, NumPy only |
+| `auto` (default) | st if installed, else lsa | — |
+| `lsa` | TF-IDF + truncated SVD | keyless, NumPy only |
 | `st` | sentence-transformers (e.g. `all-MiniLM-L6-v2`) | `pip install -e ".[st]"` |
 
 ```bash
-.venv/bin/python -m aqueduct corpus index                      # LSA (default)
-.venv/bin/python -m aqueduct corpus index --backend st         # transformer embeddings
+.venv/bin/python -m aqueduct corpus index                      # auto-selects best available
+.venv/bin/python -m aqueduct corpus index --backend lsa        # force keyless LSA
 ```
+
+The loaded transformer model is cached process-wide, so library use that both indexes and
+queries doesn't pay the load twice.
 
 Add a backend by subclassing `Embedder` (implement `fit`/`transform`/`state`/`from_state`)
 and registering it in `BACKENDS` — storage, search, and discovery are backend-agnostic.
