@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .. import config
+from ..landing import merge_jsonl
 
 API = "https://clinicaltrials.gov/api/v2/studies"
 USER_AGENT = "aqueduct/0.1 (data pipeline)"
@@ -87,8 +88,7 @@ def ingest(query: str, limit: int = 100) -> Path:
     records = search(query, limit=limit)
     out = src_dir / "trials.jsonl"
     fetched_at = datetime.now(timezone.utc).isoformat()
-    with out.open("w") as f:
-        for r in records:
-            f.write(json.dumps({**r, "query": query, "fetched_at": fetched_at}) + "\n")
-    print(f"[ingest]  clinicaltrials: {len(records)} trials for {query!r} -> {out.relative_to(config.ROOT)}")
+    recs = [{**r, "query": query, "fetched_at": fetched_at} for r in records]
+    total, added = merge_jsonl(out, recs, "nct_id")
+    print(f"[ingest]  clinicaltrials: +{added} new trials ({total} total) for {query!r} -> {out.relative_to(config.ROOT)}")
     return out

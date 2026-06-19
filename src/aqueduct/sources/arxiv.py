@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .. import config
+from ..landing import merge_jsonl
 
 API = "https://export.arxiv.org/api/query"
 USER_AGENT = "aqueduct/0.1 (data pipeline)"
@@ -127,33 +128,23 @@ def ingest(query: str, limit: int = 25, categories: list[str] | None = None) -> 
     print(f"[ingest]  arxiv: {len(entries)} hits for {query!r}")
 
     fetched_at = datetime.now(timezone.utc).isoformat()
-    with manifest.open("w") as mf:
-        for i, entry in enumerate(entries, 1):
-            m = _entry_meta(entry)
-            doc_id = m["arxiv_id"].replace("/", "_")
-            xml_path = src_dir / f"{doc_id}.xml"
-            xml_path.write_text(ET.tostring(entry, encoding="unicode"), encoding="utf-8")
-            rec = {
-                # map to the shared document schema (pmcid slot holds the doc id)
-                "pmcid": f"arXiv:{m['arxiv_id']}",
-                "pmid": None,
-                "doi": m["doi"],
-                "title": m["title"],
-                "journal": m["journal"],
-                "pub_year": m["pub_year"],
-                "authors": m["authors"],
-                "source": "arxiv",
-                "query": query,
-                "fetched_at": fetched_at,
-                "xml_file": str(xml_path),
-                "has_body": False,  # abstract-only until PDF/LaTeX extraction
-                "abstract": m["abstract"],
-                "mesh": None,  # arXiv has no MeSH
-                "keywords": m["categories"],  # arXiv subject categories
-                "grants": None,
-                "cited_by": None,
-            }
-            mf.write(json.dumps(rec) + "\n")
-            print(f"  [{i}/{len(entries)}] {rec['pmcid']} -> {xml_path.name}")
-    print(f"[ingest]  manifest -> {manifest.relative_to(config.ROOT)}")
+    built = []
+    for i, entry in enumerate(entries, 1):
+        m = _entry_meta(entry)
+        doc_id = m["arxiv_id"].replace("/", "_")
+        xml_path = src_dir / f"{doc_id}.xml"
+        xml_path.write_text(ET.tostring(entry, encoding="unicode"), encoding="utf-8")
+        built.append({
+            # map to the shared document schema (pmcid slot holds the doc id)
+            "pmcid": f"arXiv:{m['arxiv_id']}", "pmid": None, "doi": m["doi"],
+            "title": m["title"], "journal": m["journal"], "pub_year": m["pub_year"],
+            "authors": m["authors"], "source": "arxiv", "query": query,
+            "fetched_at": fetched_at, "xml_file": str(xml_path),
+            "has_body": False,  # abstract-only until PDF/LaTeX extraction
+            "abstract": m["abstract"], "mesh": None,
+            "keywords": m["categories"], "grants": None, "cited_by": None,
+        })
+        print(f"  [{i}/{len(entries)}] arXiv:{m['arxiv_id']} -> {xml_path.name}")
+    total, added = merge_jsonl(manifest, built, "pmcid")
+    print(f"[ingest]  manifest +{added} new ({total} total) -> {manifest.relative_to(config.ROOT)}")
     return src_dir

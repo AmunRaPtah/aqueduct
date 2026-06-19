@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .. import config
+from ..landing import merge_jsonl
 
 ENTRY = "https://data.rcsb.org/rest/v1/core/entry"
 USER_AGENT = "aqueduct/0.1 (data pipeline)"
@@ -55,27 +56,21 @@ def ingest(query: str | None = None, limit: int = 100) -> Path:
     ids = _referenced_pdb_ids()[:limit]
     out = src_dir / "structures.jsonl"
     fetched_at = datetime.now(timezone.utc).isoformat()
-    n = 0
-    with out.open("w") as f:
-        for pid in ids:
-            d = _get(f"{ENTRY}/{pid}")
-            if not d:
-                continue
-            info = d.get("rcsb_entry_info", {})
-            res = info.get("resolution_combined")
-            f.write(
-                json.dumps(
-                    {
-                        "pdb_id": pid,
-                        "title": d.get("struct", {}).get("title"),
-                        "method": info.get("experimental_method"),
-                        "resolution": res[0] if isinstance(res, list) and res else None,
-                        "fetched_at": fetched_at,
-                    }
-                )
-                + "\n"
-            )
-            n += 1
-            time.sleep(DELAY)
-    print(f"[ingest]  pdb: {n} structures (from {len(ids)} UniProt refs) -> {out.relative_to(config.ROOT)}")
+    recs = []
+    for pid in ids:
+        d = _get(f"{ENTRY}/{pid}")
+        if not d:
+            continue
+        info = d.get("rcsb_entry_info", {})
+        res = info.get("resolution_combined")
+        recs.append({
+            "pdb_id": pid,
+            "title": d.get("struct", {}).get("title"),
+            "method": info.get("experimental_method"),
+            "resolution": res[0] if isinstance(res, list) and res else None,
+            "fetched_at": fetched_at,
+        })
+        time.sleep(DELAY)
+    total, added = merge_jsonl(out, recs, "pdb_id")
+    print(f"[ingest]  pdb: +{added} new structures ({total} total, from {len(ids)} UniProt refs) -> {out.relative_to(config.ROOT)}")
     return out

@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .. import config
+from ..landing import merge_jsonl
 
 BASE = "https://www.ebi.ac.uk/chembl/api/data"
 USER_AGENT = "aqueduct/0.1 (data pipeline)"
@@ -136,23 +137,19 @@ def ingest(query: str, limit: int = 100) -> Path:
     syn_path = src_dir / "synonyms.jsonl"
     mech_path = src_dir / "mechanisms.jsonl"
     fetched_at = datetime.now(timezone.utc).isoformat()
-    n_syn = 0
-    ids = []
-    with mol_path.open("w") as mf, syn_path.open("w") as sf:
-        for m in molecules:
-            flat = _flatten(m)
-            if flat["chembl_id"]:
-                ids.append(flat["chembl_id"])
-            mf.write(json.dumps({**flat, "query": query, "fetched_at": fetched_at}) + "\n")
-            for syn in _synonyms(m):
-                sf.write(json.dumps(syn) + "\n")
-                n_syn += 1
+    mols, syns, ids = [], [], []
+    for m in molecules:
+        flat = _flatten(m)
+        if flat["chembl_id"]:
+            ids.append(flat["chembl_id"])
+        mols.append({**flat, "query": query, "fetched_at": fetched_at})
+        syns.extend(_synonyms(m))
     mechanisms = fetch_mechanisms(ids)
-    with mech_path.open("w") as xf:
-        for r in mechanisms:
-            xf.write(json.dumps(r) + "\n")
+    _, n_mol = merge_jsonl(mol_path, mols, "chembl_id")
+    merge_jsonl(syn_path, syns, ("chembl_id", "syn_type", "name"))
+    merge_jsonl(mech_path, mechanisms, ("molecule_chembl_id", "target_chembl_id", "action_type"))
     print(
-        f"[ingest]  chembl: {len(molecules)} molecules + {n_syn} synonyms + "
-        f"{len(mechanisms)} mechanisms for {query!r} -> {mol_path.relative_to(config.ROOT)}"
+        f"[ingest]  chembl: +{n_mol} new molecules ({len(syns)} synonyms, "
+        f"{len(mechanisms)} mechanisms) for {query!r} -> {mol_path.relative_to(config.ROOT)}"
     )
     return mol_path

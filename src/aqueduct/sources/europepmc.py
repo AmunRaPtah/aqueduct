@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .. import config
+from ..landing import merge_jsonl
 
 SEARCH_URL = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
 EFETCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
@@ -124,27 +125,23 @@ def ingest(query: str, limit: int = 25) -> Path:
     print(f"[ingest]  europepmc: {len(records)} hits for {query!r}")
 
     fetched_at = datetime.now(timezone.utc).isoformat()
-    with manifest.open("w") as mf:
-        for i, rec in enumerate(records, 1):
-            pmcid = rec["pmcid"]
-            try:
-                xml = fetch_fulltext_xml(pmcid)
-            except Exception as e:  # noqa: BLE001 - skip a bad doc, keep the batch
-                print(f"  ! {pmcid}: fetch failed ({e})")
-                continue
-            xml_path = src_dir / f"{pmcid}.xml"
-            xml_path.write_text(xml, encoding="utf-8")
-            has_body = "<body>" in xml
-            rec = {
-                **rec,
-                "source": "europepmc",
-                "query": query,
-                "fetched_at": fetched_at,
-                "xml_file": str(xml_path),
-                "has_body": has_body,
-            }
-            mf.write(json.dumps(rec) + "\n")
-            print(f"  [{i}/{len(records)}] {pmcid} {'full-text' if has_body else 'abstract-only'} -> {xml_path.name}")
-            time.sleep(EFETCH_DELAY)
-    print(f"[ingest]  manifest -> {manifest.relative_to(config.ROOT)}")
+    built = []
+    for i, rec in enumerate(records, 1):
+        pmcid = rec["pmcid"]
+        try:
+            xml = fetch_fulltext_xml(pmcid)
+        except Exception as e:  # noqa: BLE001 - skip a bad doc, keep the batch
+            print(f"  ! {pmcid}: fetch failed ({e})")
+            continue
+        xml_path = src_dir / f"{pmcid}.xml"
+        xml_path.write_text(xml, encoding="utf-8")
+        has_body = "<body>" in xml
+        built.append({
+            **rec, "source": "europepmc", "query": query, "fetched_at": fetched_at,
+            "xml_file": str(xml_path), "has_body": has_body,
+        })
+        print(f"  [{i}/{len(records)}] {pmcid} {'full-text' if has_body else 'abstract-only'} -> {xml_path.name}")
+        time.sleep(EFETCH_DELAY)
+    total, added = merge_jsonl(manifest, built, "pmcid")
+    print(f"[ingest]  manifest +{added} new ({total} total) -> {manifest.relative_to(config.ROOT)}")
     return src_dir

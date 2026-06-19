@@ -42,6 +42,11 @@ export NCBI_EMAIL="you@example.com"
 Sources land into the **same** `documents_raw` table (store aggregates every
 source's manifest); parsing is dispatched per source (`europepmc`→JATS, `arxiv`→Atom).
 
+**Incremental:** every fetch *accumulates* — batches merge into the landing zone
+de-duplicated by primary key (documents by PMCID/arXiv id, drugs by ChEMBL id, etc.),
+so repeated or varied queries grow the corpus instead of overwriting it. Re-fetching the
+same query is idempotent.
+
 | Source | Fields | Full text? |
 |--------|--------|-----------|
 | `europepmc` | biomedical: pharma, neuro, pharmacology, epigenetics, genomics | ✅ JATS body + rich metadata (MeSH, keywords, grants, citations, abstract) |
