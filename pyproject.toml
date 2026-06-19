@@ -11,6 +11,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=7"]
 st = ["sentence-transformers>=2.2"]  # optional 'st' embedding backend
+pdf = ["pdfminer.six>=20221105"]     # optional arXiv PDF full-text extraction
 
 [project.scripts]
 aqueduct = "aqueduct.cli:main"

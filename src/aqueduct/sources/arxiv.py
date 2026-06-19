@@ -1,13 +1,15 @@
-"""arXiv connector (math / CS / physics / quant-bio / stats — full metadata + abstract).
+"""arXiv connector (math / CS / physics / quant-bio / stats — metadata + full text).
 
-arXiv's API returns Atom XML with rich metadata and the abstract. Full body text
-lives only in the PDF / LaTeX e-print (a later systematic increment); for now each
-article lands as title + abstract sections, with the PDF URL kept in metadata.
+arXiv's API returns Atom XML with rich metadata and the abstract. Optional full body
+text is extracted from the PDF (`--fulltext`, needs `pip install -e '.[pdf]'`) and
+injected into the stored entry so the document pipeline produces full-text sections.
 """
 
 from __future__ import annotations
 
+import io
 import json
+import re
 import time
 import urllib.parse
 import urllib.request
@@ -17,6 +19,9 @@ from pathlib import Path
 
 from .. import config
 from ..landing import merge_jsonl
+
+PDF_URL = "https://arxiv.org/pdf/{}.pdf"
+_FT_TAG = f"{{{'http://arxiv.org/schemas/atom'}}}fulltext"  # arxiv-ns child element
 
 API = "https://export.arxiv.org/api/query"
 USER_AGENT = "aqueduct/0.1 (data pipeline)"
@@ -105,6 +110,33 @@ def _entry_meta(entry: ET.Element) -> dict:
     }
 
 
+def extract_pdf_text(arxiv_id: str) -> str | None:
+    """Download an arXiv PDF and extract its text (needs the optional 'pdf' extra)."""
+    try:
+        from pdfminer.high_level import extract_text
+    except ImportError:  # pragma: no cover - environment dependent
+        raise RuntimeError("full text needs pdfminer.six: pip install -e '.[pdf]'")
+    try:
+        data = _get(PDF_URL.format(arxiv_id), timeout=60)
+        text = extract_text(io.BytesIO(data)) or ""
+    except Exception:  # noqa: BLE001 - a bad/again PDF shouldn't kill the batch
+        return None
+    # strip control chars that are invalid in XML 1.0 (PDFs emit form-feeds etc.),
+    # else the injected text breaks re-parsing of the stored entry
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", " ", text)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    return text or None
+
+
+def inject_fulltext(entry: ET.Element, text: str) -> None:
+    """Attach extracted full text to an Atom entry (arxiv-namespaced child)."""
+    el = entry.find(_FT_TAG)
+    if el is None:
+        el = ET.SubElement(entry, _FT_TAG)
+    el.text = text
+
+
 def parse_atom(xml: str) -> dict:
     """Parse a stored arXiv Atom entry into {'meta', 'sections'} (document pipeline)."""
     try:
@@ -117,21 +149,36 @@ def parse_atom(xml: str) -> dict:
         sections.append({"sec_type": "title", "sec_title": None, "text": m["title"]})
     if m["abstract"]:
         sections.append({"sec_type": "abstract", "sec_title": "abstract", "text": m["abstract"]})
+    ft = entry.find(_FT_TAG)
+    if ft is not None and ft.text:
+        sections.append({"sec_type": "body", "sec_title": "full text", "text": ft.text})
     return {"meta": m, "sections": sections}
 
 
-def ingest(query: str, limit: int = 25, categories: list[str] | None = None) -> Path:
-    """Land arXiv entries (Atom XML) + a metadata manifest in the landing zone."""
+def ingest(query: str, limit: int = 25, categories: list[str] | None = None,
+           fulltext: bool = False) -> Path:
+    """Land arXiv entries (Atom XML) + a metadata manifest in the landing zone.
+
+    With `fulltext=True`, the PDF is downloaded and its text injected into the stored
+    entry so the document pipeline produces full-text sections (else abstract-only).
+    """
     src_dir = config.raw_source_dir("arxiv")
     manifest = src_dir / "manifest.jsonl"
     entries = search(query, limit=limit, categories=categories)
-    print(f"[ingest]  arxiv: {len(entries)} hits for {query!r}")
+    print(f"[ingest]  arxiv: {len(entries)} hits for {query!r}{' (+full text)' if fulltext else ''}")
 
     fetched_at = datetime.now(timezone.utc).isoformat()
     built = []
     for i, entry in enumerate(entries, 1):
         m = _entry_meta(entry)
         doc_id = m["arxiv_id"].replace("/", "_")
+        has_body = False
+        if fulltext:
+            body = extract_pdf_text(m["arxiv_id"])
+            if body:
+                inject_fulltext(entry, body)
+                has_body = True
+            time.sleep(PAGE_DELAY)  # be polite between PDF downloads
         xml_path = src_dir / f"{doc_id}.xml"
         xml_path.write_text(ET.tostring(entry, encoding="unicode"), encoding="utf-8")
         built.append({
@@ -140,11 +187,12 @@ def ingest(query: str, limit: int = 25, categories: list[str] | None = None) -> 
             "title": m["title"], "journal": m["journal"], "pub_year": m["pub_year"],
             "authors": m["authors"], "source": "arxiv", "query": query,
             "fetched_at": fetched_at, "xml_file": str(xml_path),
-            "has_body": False,  # abstract-only until PDF/LaTeX extraction
+            "has_body": has_body,
             "abstract": m["abstract"], "mesh": None,
             "keywords": m["categories"], "grants": None, "cited_by": None,
         })
-        print(f"  [{i}/{len(entries)}] arXiv:{m['arxiv_id']} -> {xml_path.name}")
+        tag = "full-text" if has_body else "abstract"
+        print(f"  [{i}/{len(entries)}] arXiv:{m['arxiv_id']} ({tag}) -> {xml_path.name}")
     total, added = merge_jsonl(manifest, built, "pmcid")
     print(f"[ingest]  manifest +{added} new ({total} total) -> {manifest.relative_to(config.ROOT)}")
     return src_dir

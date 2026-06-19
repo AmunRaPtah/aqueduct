@@ -29,11 +29,13 @@ def main(argv: list[str] | None = None) -> int:
     cr.add_argument("--query", required=True, help="query, e.g. 'CRISPR gene therapy'")
     cr.add_argument("--limit", type=int, default=25, help="max articles")
     cr.add_argument("--source", choices=list(INGESTORS), default="europepmc")
+    cr.add_argument("--fulltext", action="store_true", help="arXiv: extract PDF body text")
 
     cf = c_sub.add_parser("fetch", help="ingest full text into the landing zone")
     cf.add_argument("--query", required=True)
     cf.add_argument("--limit", type=int, default=25)
     cf.add_argument("--source", choices=list(INGESTORS), default="europepmc")
+    cf.add_argument("--fulltext", action="store_true", help="arXiv: extract PDF body text")
 
     c_sub.add_parser("build", help="store + process + chunk the landing zone")
     c_sub.add_parser("report", help="print the corpus report")
@@ -89,9 +91,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "corpus":
         if args.corpus_cmd == "run":
-            corpus.run(args.query, limit=args.limit, source=args.source)
+            corpus.run(args.query, limit=args.limit, source=args.source, fulltext=args.fulltext)
         elif args.corpus_cmd == "fetch":
-            INGESTORS[args.source](args.query, limit=args.limit)
+            kw = {"fulltext": args.fulltext} if args.source == "arxiv" else {}
+            INGESTORS[args.source](args.query, limit=args.limit, **kw)
         elif args.corpus_cmd == "build":
             corpus.build()
         elif args.corpus_cmd == "report":

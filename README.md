@@ -50,7 +50,7 @@ same query is idempotent.
 | Source | Fields | Full text? |
 |--------|--------|-----------|
 | `europepmc` | biomedical: pharma, neuro, pharmacology, epigenetics, genomics | ✅ JATS body + rich metadata (MeSH, keywords, grants, citations, abstract) |
-| `arxiv` | math, computational/mathematical modeling, emerging tech, first principles | metadata + abstract (PDF/LaTeX body = next increment) |
+| `arxiv` | math, computational/mathematical modeling, emerging tech, first principles | metadata + abstract; **full PDF body** with `--fulltext` (needs `pip install -e ".[pdf]"`) |
 
 ## Structured datasets (records, not documents)
 

@@ -25,10 +25,11 @@ def build(con=None) -> None:
             con.close()
 
 
-def run(query: str, limit: int = 25, source: str = "europepmc") -> None:
+def run(query: str, limit: int = 25, source: str = "europepmc", fulltext: bool = False) -> None:
     """Ingest from one source, build all layers, print the corpus report."""
     print(f"=== Aqueduct corpus: {source} {query!r} (limit {limit}) ===")
-    INGESTORS[source](query, limit=limit)
+    kw = {"fulltext": fulltext} if source == "arxiv" else {}
+    INGESTORS[source](query, limit=limit, **kw)
     con = connect()
     try:
         build(con)
