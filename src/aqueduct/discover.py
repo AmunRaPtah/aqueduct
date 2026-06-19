@@ -82,6 +82,83 @@ def ranked_papers(name: str, k: int = 8, con=None):
             con.close()
 
 
+def _protein_profile(con, gene_norm: str) -> dict:
+    """Gather graph context for a protein/gene into a concept profile."""
+    have = {r[0] for r in con.execute("SHOW TABLES").fetchall()}
+    info = con.execute(
+        "SELECT protein_name, function, aliases FROM uniprot_proteins WHERE lower(gene)=? LIMIT 1",
+        [gene_norm]).fetchone() if "uniprot_proteins" in have else None
+    drugs = [r[0] for r in con.execute(
+        "SELECT DISTINCT drug_norm FROM link_drug_protein WHERE lower(gene)=?",
+        [gene_norm]).fetchall()] if "link_drug_protein" in have else []
+    desc = con.execute(
+        "SELECT description FROM ensembl_genes WHERE lower(gene)=? LIMIT 1",
+        [gene_norm]).fetchone() if "ensembl_genes" in have else None
+
+    parts = [gene_norm]
+    if info:
+        parts += [p for p in info if p]
+    parts += drugs
+    if desc and desc[0]:
+        parts.append(desc[0])
+    return {"text": ". ".join(parts), "drugs": drugs,
+            "protein_name": info[0] if info else None,
+            "description": desc[0] if desc else None}
+
+
+def ranked_papers_protein(gene: str, k: int = 8, con=None):
+    """Return (profile, [(pmcid, score, is_direct)]) for a gene, ranked semantically."""
+    owns = con is None
+    con = con or connect()
+    try:
+        gnorm = gene.lower()
+        prof = _protein_profile(con, gnorm)
+        if not (prof["protein_name"] or prof["drugs"] or prof["description"]):
+            return prof, []
+        hits = embeddings.rank(prof["text"], k=k * 8)
+        best: dict[str, float] = {}
+        for pmcid, _cid, score in hits:
+            if score > best.get(pmcid, -1):
+                best[pmcid] = score
+        direct = {r[0] for r in con.execute(
+            "SELECT DISTINCT pmcid FROM link_protein_document WHERE lower(gene)=? AND confidence='strong'",
+            [gnorm]).fetchall()}
+        ranked = sorted(best.items(), key=lambda kv: kv[1], reverse=True)[:k]
+        return prof, [(pmcid, score, pmcid in direct) for pmcid, score in ranked]
+    finally:
+        if owns:
+            con.close()
+
+
+def protein(gene: str, k: int = 8, con=None) -> None:
+    """Discover literature conceptually about a protein/gene via the graph + embeddings."""
+    owns = con is None
+    con = con or connect()
+    try:
+        prof, ranked = ranked_papers_protein(gene, k=k, con=con)
+        print(f"\n=== Discover protein: {gene} ===")
+        if prof["protein_name"]:
+            print(f"  protein:    {prof['protein_name']}")
+        if prof["drugs"]:
+            print(f"  drugs:      {', '.join(prof['drugs'][:10])}")
+        if prof["description"]:
+            print(f"  gene:       {prof['description'][:70]}")
+        if not ranked:
+            print("\n  (no semantic index / graph context — run `corpus index` + `links build`)")
+            return
+        print(f"\nPapers conceptually about its biology ({len(ranked)}):")
+        for pmcid, score, is_direct in ranked:
+            title = con.execute(
+                "SELECT title FROM documents_raw WHERE pmcid=?", [pmcid]).fetchone()
+            tag = "DIRECT  " if is_direct else "SEMANTIC"
+            print(f"  [{score:.3f}] {tag} {pmcid}  {(title[0] if title else '')[:50]}")
+        n_new = sum(1 for _, _, d in ranked if not d)
+        print(f"\n  {n_new}/{len(ranked)} surfaced by meaning beyond the lexical links.\n")
+    finally:
+        if owns:
+            con.close()
+
+
 def drug(name: str, k: int = 8, con=None) -> None:
     """Discover literature conceptually about a drug's biology via the graph + embeddings."""
     owns = con is None

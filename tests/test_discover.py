@@ -45,3 +45,12 @@ def test_discovery_surfaces_target_biology_paper(con):
     assert "PMC_BIO" in pmcids
     # and it is flagged SEMANTIC (not a direct lexical drug->doc link)
     assert any(p == "PMC_BIO" and not is_direct for p, _s, is_direct in ranked)
+
+
+def test_protein_profile_and_discovery(con):
+    _setup(con)
+    prof = discover._protein_profile(con, "oprm1")
+    assert prof["protein_name"] == "Mu-type opioid receptor"
+    assert "fentanyl" in prof["drugs"]          # drug targeting it, from the graph
+    _, ranked = discover.ranked_papers_protein("OPRM1", k=5, con=con)
+    assert ranked, "expected ranked papers for the gene"

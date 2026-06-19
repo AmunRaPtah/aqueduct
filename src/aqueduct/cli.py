@@ -78,6 +78,9 @@ def main(argv: list[str] | None = None) -> int:
     ld = l_sub.add_parser("discover", help="semantic-over-graph: papers about a drug's biology")
     ld.add_argument("drug")
     ld.add_argument("-k", type=int, default=8)
+    ldp = l_sub.add_parser("discover-protein", help="semantic-over-graph: papers about a gene's biology")
+    ldp.add_argument("gene")
+    ldp.add_argument("-k", type=int, default=8)
 
     # --- synthetic events demo (original scaffold) ---
     p_run = sub.add_parser("run", help="[demo] synthetic events pipeline")
@@ -126,6 +129,8 @@ def main(argv: list[str] | None = None) -> int:
             links.explore_protein(args.gene)
         elif args.links_cmd == "discover":
             discover.drug(args.drug, k=args.k)
+        elif args.links_cmd == "discover-protein":
+            discover.protein(args.gene, k=args.k)
     elif args.command == "run":
         pipeline.run(n_events=args.events, seed=args.seed)
     elif args.command == "ingest":
