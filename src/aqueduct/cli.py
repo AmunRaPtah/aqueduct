@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import argparse
 
-from . import analytics, corpus, datasets, documents, ingest, links, pipeline, process, storage
+from . import (analytics, corpus, datasets, documents, embeddings, ingest, links,
+               pipeline, process, storage)
 from .sources import arxiv, chembl, clinicaltrials, europepmc, pdb, uniprot
 
 INGESTORS = {"europepmc": europepmc.ingest, "arxiv": arxiv.ingest}
@@ -40,6 +41,11 @@ def main(argv: list[str] | None = None) -> int:
     cq = c_sub.add_parser("search", help="lexical search over chunks")
     cq.add_argument("term")
     cq.add_argument("-k", type=int, default=8)
+
+    c_sub.add_parser("index", help="build the semantic (LSA) index over chunks")
+    cs = c_sub.add_parser("semantic", help="semantic search over chunks")
+    cs.add_argument("query")
+    cs.add_argument("-k", type=int, default=8)
 
     # --- structured datasets (ChEMBL, ...) ---
     d_grp = sub.add_parser("data", help="structured datasets (ChEMBL, clinical, ...)")
@@ -85,6 +91,10 @@ def main(argv: list[str] | None = None) -> int:
             documents.report()
         elif args.corpus_cmd == "search":
             documents.search(args.term, k=args.k)
+        elif args.corpus_cmd == "index":
+            embeddings.build_index()
+        elif args.corpus_cmd == "semantic":
+            embeddings.semantic_search(args.query, k=args.k)
     elif args.command == "data":
         if args.data_cmd == "fetch":
             DATA_INGESTORS[args.source](args.query, limit=args.limit)

@@ -139,6 +139,20 @@ without re-fetching):
 `corpus run` = fetch → store → process → chunk → report. Sub-commands
 (`fetch`/`build`/`report`/`search`) run stages individually.
 
+### Semantic search
+Concept-level search over chunks via a pluggable embedder — default **LSA**
+(TF-IDF + truncated SVD, pure NumPy: no API key, no model download). Build the index
+after (re)building the corpus, then query by meaning rather than keywords:
+
+```bash
+.venv/bin/python -m aqueduct corpus index                              # embed all chunks
+.venv/bin/python -m aqueduct corpus semantic "reversing opioid overdose" -k 5
+```
+
+The index is a derived sidecar (`data/lsa_model.json` + `data/chunk_index.npz`). Swap in
+transformer/API embeddings later by implementing `fit`/`transform` on a new embedder —
+storage and search are backend-agnostic.
+
 ### Adding sources
 Drop a new connector in `src/aqueduct/sources/` that lands `<id>.xml` files plus a
 `manifest.jsonl` under `data/raw/<source>/`. `store_documents` picks up every
