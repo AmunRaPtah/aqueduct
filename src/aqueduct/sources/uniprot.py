@@ -34,12 +34,31 @@ def _get(url: str, *, retries: int = 3, timeout: int = 30) -> dict:
     raise RuntimeError(f"GET failed: {url}") from last
 
 
+def _names(desc: dict) -> list[str]:
+    """All protein name strings: recommended + alternative full names + short names."""
+    out: list[str] = []
+    blocks = []
+    if desc.get("recommendedName"):
+        blocks.append(desc["recommendedName"])
+    blocks += desc.get("alternativeNames", [])
+    for b in blocks:
+        full = (b.get("fullName") or {}).get("value")
+        if full:
+            out.append(full)
+        out += [s.get("value") for s in b.get("shortNames", []) if s.get("value")]
+    return out
+
+
 def _flatten(r: dict) -> dict:
     desc = r.get("proteinDescription", {})
     rec = desc.get("recommendedName") or (desc.get("submissionNames") or [{}])[0]
     pname = (rec.get("fullName") or {}).get("value")
     genes = r.get("genes", [])
     gene = (genes[0].get("geneName", {}) or {}).get("value") if genes else None
+    # aliases for literature matching: protein names + gene synonyms
+    aliases = _names(desc)
+    for g in genes:
+        aliases += [s.get("value") for s in g.get("synonyms", []) if s.get("value")]
     function = None
     for c in r.get("comments", []):
         if c.get("commentType") == "FUNCTION" and c.get("texts"):
@@ -58,6 +77,7 @@ def _flatten(r: dict) -> dict:
         "function": function,
         "pdb_ids": "; ".join(pdb) or None,
         "chembl_target": chembl,
+        "aliases": "; ".join(dict.fromkeys(a for a in aliases if a)) or None,
     }
 
 

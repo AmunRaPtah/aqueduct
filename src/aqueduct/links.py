@@ -65,6 +65,39 @@ def _pat(col: str) -> str:
     return f"regexp_matches(lower({col}), '{_WORD}' || n.term || '([^a-z]|$)')"
 
 
+# generic words too vague to identify a protein on their own
+_PROT_STOP = {
+    "receptor", "protein", "factor", "kinase", "enzyme", "subunit", "channel",
+    "transporter", "alpha", "beta", "gamma", "delta", "type", "human", "chain",
+    "domain", "family", "like", "putative", "isoform", "precursor", "binding",
+}
+_GB = "(^|[^a-z0-9])"   # left boundary that also excludes digits (gene symbols have them)
+_GBR = "([^a-z0-9]|$)"  # right boundary
+
+
+def _protein_terms(gene: str | None, aliases: list[str]):
+    """Yield (term, regexp_pattern) for a protein's gene symbol + name aliases.
+
+    Single-token names need length/specificity; multiword names match with flexible
+    separators (so "Mu opioid receptor" matches "mu-opioid receptor").
+    """
+    gene_l = (gene or "").lower()
+    out: dict[str, str] = {}
+    for cand in ([gene] if gene else []) + list(aliases):
+        toks = re.findall(r"[a-z0-9]+", (cand or "").lower())
+        if not toks:
+            continue
+        if len(toks) == 1:
+            t = toks[0]
+            specific = (len(t) >= 4 and t not in _PROT_STOP) or (t == gene_l and len(t) >= 3)
+            if specific:
+                out[t] = f"{_GB}{t}{_GBR}"
+        elif any(len(t) >= 4 and t not in _PROT_STOP for t in toks):
+            term = " ".join(toks)
+            out[term] = _GB + "[^a-z0-9]+".join(toks) + _GBR
+    return out.items()
+
+
 def build(con: duckdb.DuckDBPyConnection | None = None) -> dict[str, int]:
     """Resolve drug entities + build all link tables. Returns row counts."""
     owns = con is None
@@ -196,6 +229,16 @@ def build(con: duckdb.DuckDBPyConnection | None = None) -> dict[str, int]:
                 FROM uniprot_proteins WHERE accession IS NOT NULL
                 """
             )
+            # match-term dictionary: gene symbol + name aliases, each with its regexp
+            con.execute("CREATE OR REPLACE TABLE entity_protein_names "
+                        "(accession TEXT, gene TEXT, term TEXT, pattern TEXT)")
+            for acc, gene, aliases in con.execute(
+                "SELECT accession, gene, aliases FROM uniprot_proteins WHERE accession IS NOT NULL"
+            ).fetchall():
+                alist = [a.strip() for a in (aliases or "").split(";") if a.strip()]
+                for term, pat in _protein_terms(gene, alist):
+                    con.execute("INSERT INTO entity_protein_names VALUES (?,?,?,?)",
+                                [acc, gene, term, pat])
             # drug -> target protein, via ChEMBL mechanism <-> UniProt ChEMBL-target xref
             if "chembl_mechanisms" in tables:
                 con.execute(
@@ -216,25 +259,22 @@ def build(con: duckdb.DuckDBPyConnection | None = None) -> dict[str, int]:
                 WHERE trim(pid) <> ''
                 """
             )
-            # protein -> document, matching the gene symbol (boundary excludes digits too)
-            gpat = lambda col: (  # noqa: E731
-                f"regexp_matches(lower({col}), '(^|[^a-z0-9])' || p.gene_norm || '([^a-z0-9]|$)')"
-            )
+            # protein -> document, matching gene symbol + name aliases (stored patterns)
             if have_docs:
                 con.execute(
-                    f"""
+                    """
                     INSERT INTO link_protein_document
-                    WITH genes AS (SELECT accession, gene, gene_norm FROM entity_proteins
-                                   WHERE gene_norm IS NOT NULL AND length(gene_norm) >= 3),
-                    meta AS (
-                        SELECT DISTINCT p.accession, p.gene, m.pmcid
-                        FROM genes p JOIN _doc_meta m ON {gpat("m.blob")}
+                    WITH meta AS (
+                        SELECT DISTINCT n.accession, n.gene, m.pmcid
+                        FROM entity_protein_names n JOIN _doc_meta m
+                          ON regexp_matches(m.blob, n.pattern)
                     ),
                     body AS (
-                        SELECT p.accession, p.gene, b.pmcid,
-                               sum(len(regexp_extract_all(b.blob, '(^|[^a-z0-9])' || p.gene_norm || '([^a-z0-9]|$)'))) AS n_body
-                        FROM genes p JOIN _doc_body b ON {gpat("b.blob")}
-                        GROUP BY p.accession, p.gene, b.pmcid
+                        SELECT n.accession, n.gene, b.pmcid,
+                               sum(len(regexp_extract_all(b.blob, n.pattern))) AS n_body
+                        FROM entity_protein_names n JOIN _doc_body b
+                          ON regexp_matches(b.blob, n.pattern)
+                        GROUP BY n.accession, n.gene, b.pmcid
                     )
                     SELECT coalesce(m.accession, b.accession), coalesce(m.gene, b.gene),
                            coalesce(m.pmcid, b.pmcid), m.pmcid IS NOT NULL,

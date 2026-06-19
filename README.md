@@ -98,7 +98,13 @@ normalised drug name (salt forms stripped) against trial interventions and docum
 | `entity_proteins` | canonical protein (UniProt accession, gene) |
 | `link_drug_protein` | drug ↔ target protein, via ChEMBL mechanism ↔ UniProt xref |
 | `link_protein_structure` | protein ↔ PDB structure (UniProt cross-refs) |
-| `link_protein_document` | protein (gene symbol) ↔ paper, with confidence |
+| `entity_protein_names` | protein → match terms (gene symbol + name aliases) |
+| `link_protein_document` | protein ↔ paper, with confidence |
+
+Protein↔document matching uses the **gene symbol plus name aliases** (UniProt
+recommended/alternative names + short names + gene synonyms). Multiword aliases match
+with flexible separators, so a paper saying "mu-opioid receptor" links to `OPRM1` even
+when it never writes the gene symbol.
 
 The protein arm makes the graph biological: **drug → target protein → structure**, and
 drug → trial → paper. `links protein OPRM1` shows a target's drugs, structures, papers.

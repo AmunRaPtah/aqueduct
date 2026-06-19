@@ -83,8 +83,13 @@ def test_clinicaltrials_flatten():
 def test_uniprot_flatten_extracts_xrefs():
     r = {
         "primaryAccession": "P1", "uniProtkbId": "X_HUMAN",
-        "proteinDescription": {"recommendedName": {"fullName": {"value": "Receptor"}}},
-        "genes": [{"geneName": {"value": "OPRM1"}}],
+        "proteinDescription": {
+            "recommendedName": {"fullName": {"value": "Mu-type opioid receptor"},
+                                "shortNames": [{"value": "MOR-1"}]},
+            "alternativeNames": [{"fullName": {"value": "Mu opioid receptor"},
+                                  "shortNames": [{"value": "MOP"}]}],
+        },
+        "genes": [{"geneName": {"value": "OPRM1"}, "synonyms": [{"value": "MOR1"}]}],
         "organism": {"scientificName": "Homo sapiens"},
         "sequence": {"length": 400},
         "comments": [{"commentType": "FUNCTION", "texts": [{"value": "Binds."}]}],
@@ -97,6 +102,8 @@ def test_uniprot_flatten_extracts_xrefs():
     assert f["accession"] == "P1" and f["gene"] == "OPRM1"
     assert f["pdb_ids"] == "5C1M; 8E0G"
     assert f["chembl_target"] == "T_OPRM1"
+    aliases = f["aliases"].split("; ")
+    assert "Mu opioid receptor" in aliases and "MOP" in aliases and "MOR1" in aliases
 
 
 # ---- normalization + chunking ----

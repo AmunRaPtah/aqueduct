@@ -101,7 +101,8 @@ def seed_uniprot():
         {"accession": "P35372", "entry_name": "OPRM_HUMAN",
          "protein_name": "Mu-type opioid receptor", "gene": "OPRM1",
          "organism": "Homo sapiens", "length": 400, "function": "Receptor.",
-         "pdb_ids": "5C1M; 8E0G", "chembl_target": "T_OPRM1"},
+         "pdb_ids": "5C1M; 8E0G", "chembl_target": "T_OPRM1",
+         "aliases": "Mu-type opioid receptor; Mu opioid receptor; MOP; MOR1"},
     ])
 
 

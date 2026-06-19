@@ -71,6 +71,36 @@ def test_protein_structure_and_document_links(con):
     assert conf == "strong"
 
 
+def test_protein_alias_matching_links_receptor_name(con):
+    """A paper that says 'mu-opioid receptor' (not the gene OPRM1) still links."""
+    seed.seed_document(
+        "PMC7", title="Signaling review",
+        abstract="The mu-opioid receptor mediates analgesia.",
+        sections=[("Body", "Activation of the mu opioid receptor drives signaling.")],
+    )
+    corpus.build(con)
+    seed.seed_uniprot()
+    seed.seed_pdb()
+    datasets.build(con)
+    links.build(con)
+    conf = con.execute(
+        "SELECT confidence FROM link_protein_document WHERE gene='OPRM1' AND pmcid='PMC7'"
+    ).fetchone()
+    assert conf is not None and conf[0] == "strong"
+
+
+def test_protein_term_builder_flexible_phrase():
+    terms = dict(links._protein_terms("OPRM1", ["Mu opioid receptor", "receptor", "MOP"]))
+    assert "oprm1" in terms                  # gene symbol
+    assert "mu opioid receptor" in terms     # multiword alias kept
+    assert "receptor" not in terms           # generic single token dropped
+    assert "mop" not in terms                # too short (<4) single token dropped
+    # the phrase pattern tolerates hyphen/space separators
+    import re
+    pat = terms["mu opioid receptor"]
+    assert re.search(pat, "the mu-opioid receptor binds")
+
+
 def test_synonym_only_mention_links_drug_to_doc(con):
     """A paper that says only the trade name still links to the canonical drug."""
     seed.seed_document("PMC9", title="Pain management review",
