@@ -166,9 +166,13 @@ parsers, type coercion, entity normalization, the document pipeline, dataset loa
 and the full link graph (drug ⇄ trial ⇄ paper ⇄ protein ⇄ structure).
 
 ```bash
-.venv/bin/pip install pytest
-.venv/bin/pytest -q          # ~20 tests, a few seconds
+.venv/bin/pip install -e ".[dev]"
+.venv/bin/pytest -q          # ~28 tests, a few seconds
 ```
+
+**CI:** `.github/workflows/ci.yml` runs the suite on Python 3.10–3.12 on every push /
+PR (activates once the repo is pushed to GitHub). Tests are offline, so CI needs no
+network or secrets.
 
 ## Demo: synthetic events pipeline
 
