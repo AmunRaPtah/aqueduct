@@ -162,9 +162,23 @@ after (re)building the corpus, then query by meaning rather than keywords:
 .venv/bin/python -m aqueduct corpus semantic "reversing opioid overdose" -k 5
 ```
 
-The index is a derived sidecar (`data/lsa_model.json` + `data/chunk_index.npz`). Swap in
-transformer/API embeddings later by implementing `fit`/`transform` on a new embedder —
-storage and search are backend-agnostic.
+The index is a derived sidecar (`data/lsa_model.json` + `data/chunk_index.npz`) and records
+which **backend** produced it, so search reconstructs the right embedder.
+
+**Backends** (registry in `embeddings.BACKENDS`):
+
+| `--backend` | What | Deps |
+|-------------|------|------|
+| `lsa` (default) | TF-IDF + truncated SVD | keyless, NumPy only |
+| `st` | sentence-transformers (e.g. `all-MiniLM-L6-v2`) | `pip install -e ".[st]"` |
+
+```bash
+.venv/bin/python -m aqueduct corpus index                      # LSA (default)
+.venv/bin/python -m aqueduct corpus index --backend st         # transformer embeddings
+```
+
+Add a backend by subclassing `Embedder` (implement `fit`/`transform`/`state`/`from_state`)
+and registering it in `BACKENDS` — storage, search, and discovery are backend-agnostic.
 
 ### Adding sources
 Drop a new connector in `src/aqueduct/sources/` that lands `<id>.xml` files plus a

@@ -33,8 +33,35 @@ def _tokens(text: str) -> list[str]:
     return [t for t in _TOKEN.findall(text.lower()) if t not in _STOP]
 
 
-class LsaEmbedder:
+class Embedder:
+    """Backend interface. Implement `fit`/`transform`/`state`/`from_state`.
+
+    `needs_fit=True` backends learn from the corpus (LSA); pretrained backends
+    (transformers) set it False and ignore `fit`.
+    """
+
+    name = "base"
+    needs_fit = True
+
+    def fit(self, texts: list[str]) -> "Embedder":
+        return self
+
+    def transform(self, texts: list[str]) -> np.ndarray:  # pragma: no cover - abstract
+        raise NotImplementedError
+
+    def state(self) -> dict:  # pragma: no cover - abstract
+        raise NotImplementedError
+
+    @classmethod
+    def from_state(cls, state: dict) -> "Embedder":  # pragma: no cover - abstract
+        raise NotImplementedError
+
+
+class LsaEmbedder(Embedder):
     """TF-IDF + truncated-SVD (latent semantic analysis) embedder."""
+
+    name = "lsa"
+    needs_fit = True
 
     def __init__(self, dims: int = 128, max_vocab: int = 8000, min_df: int = 2):
         self.dims = dims
@@ -90,12 +117,64 @@ class LsaEmbedder:
                 "idf": self.idf.tolist(), "components": self.components.tolist()}
 
     @classmethod
-    def load(cls, state: dict) -> "LsaEmbedder":
+    def from_state(cls, state: dict) -> "LsaEmbedder":
         e = cls(dims=state["dims"])
         e.vocab = state["vocab"]
         e.idf = np.array(state["idf"])
         e.components = np.array(state["components"])
         return e
+
+    load = from_state  # backwards-compatible alias
+
+
+class SentenceTransformerEmbedder(Embedder):
+    """Pretrained sentence-transformer embeddings (optional; `pip install -e '.[st]'`).
+
+    No corpus fitting — the model is loaded by name and encodes text directly. Higher
+    quality than LSA at the cost of a heavyweight dependency + one-time model download.
+    """
+
+    name = "st"
+    needs_fit = False
+
+    def __init__(self, model: str = "all-MiniLM-L6-v2"):
+        self.model_name = model
+        self._model = None
+
+    def _ensure(self):
+        if self._model is None:
+            try:
+                from sentence_transformers import SentenceTransformer
+            except ImportError as e:  # pragma: no cover - environment dependent
+                raise RuntimeError(
+                    "the 'st' backend needs sentence-transformers: pip install -e '.[st]'"
+                ) from e
+            self._model = SentenceTransformer(self.model_name)
+
+    def transform(self, texts: list[str]) -> np.ndarray:
+        self._ensure()
+        v = self._model.encode(list(texts), normalize_embeddings=True)
+        return np.asarray(v, dtype=np.float32)
+
+    def state(self) -> dict:
+        return {"model": self.model_name}
+
+    @classmethod
+    def from_state(cls, state: dict) -> "SentenceTransformerEmbedder":
+        return cls(model=state.get("model", "all-MiniLM-L6-v2"))
+
+
+# backend registry — add a class here to make it selectable via `--backend`
+BACKENDS: dict[str, type[Embedder]] = {
+    "lsa": LsaEmbedder,
+    "st": SentenceTransformerEmbedder,
+}
+
+
+def make_embedder(backend: str, **opts) -> Embedder:
+    if backend not in BACKENDS:
+        raise ValueError(f"unknown backend {backend!r}; choices: {sorted(BACKENDS)}")
+    return BACKENDS[backend](**opts)
 
 
 def _l2norm(x: np.ndarray) -> np.ndarray:
@@ -108,8 +187,9 @@ def _index_paths():
     return (config.DATA_DIR / "lsa_model.json", config.DATA_DIR / "chunk_index.npz")
 
 
-def build_index(con=None, dims: int = 128) -> int:
-    """Embed every chunk and persist the index. Returns the chunk count."""
+def build_index(con=None, backend: str = "lsa", dims: int = 128,
+                model: str = "all-MiniLM-L6-v2") -> int:
+    """Embed every chunk with the chosen backend and persist the index."""
     owns = con is None
     con = con or connect()
     try:
@@ -120,15 +200,19 @@ def build_index(con=None, dims: int = 128) -> int:
             print("[index]   no chunks to index — build the corpus first")
             return 0
         texts = [r[2] for r in rows]
-        emb = LsaEmbedder(dims=dims).fit(texts)
+        opts = {"lsa": {"dims": dims}, "st": {"model": model}}.get(backend, {})
+        emb = make_embedder(backend, **opts)
+        if emb.needs_fit:
+            emb.fit(texts)
         vecs = emb.transform(texts).astype(np.float32)
         model_path, idx_path = _index_paths()
         config.DATA_DIR.mkdir(parents=True, exist_ok=True)
-        model_path.write_text(json.dumps(emb.state()))
+        model_path.write_text(json.dumps({"backend": emb.name, "state": emb.state()}))
         np.savez(idx_path, vectors=vecs,
                  pmcid=np.array([r[0] for r in rows]),
                  chunk_id=np.array([r[1] for r in rows]))
-        print(f"[index]   embedded {len(rows)} chunks ({vecs.shape[1]} dims) -> {idx_path.name}")
+        print(f"[index]   embedded {len(rows)} chunks via '{emb.name}' "
+              f"({vecs.shape[1]} dims) -> {idx_path.name}")
         return len(rows)
     finally:
         if owns:
@@ -140,7 +224,8 @@ def rank(query: str, k: int = 8) -> list[tuple[str, int, float]]:
     model_path, idx_path = _index_paths()
     if not model_path.exists() or not idx_path.exists():
         return []
-    emb = LsaEmbedder.load(json.loads(model_path.read_text()))
+    meta = json.loads(model_path.read_text())
+    emb = BACKENDS[meta["backend"]].from_state(meta["state"])
     data = np.load(idx_path, allow_pickle=True)
     vectors, pmcids, chunk_ids = data["vectors"], data["pmcid"], data["chunk_id"]
     qv = emb.transform([query])[0]

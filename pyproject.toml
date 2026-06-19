@@ -10,6 +10,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=7"]
+st = ["sentence-transformers>=2.2"]  # optional 'st' embedding backend
 
 [project.scripts]
 aqueduct = "aqueduct.cli:main"

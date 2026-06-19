@@ -42,7 +42,11 @@ def main(argv: list[str] | None = None) -> int:
     cq.add_argument("term")
     cq.add_argument("-k", type=int, default=8)
 
-    c_sub.add_parser("index", help="build the semantic (LSA) index over chunks")
+    ci = c_sub.add_parser("index", help="build the semantic index over chunks")
+    ci.add_argument("--backend", choices=["lsa", "st"], default="lsa",
+                    help="lsa (keyless, default) or st (sentence-transformers)")
+    ci.add_argument("--dims", type=int, default=128, help="LSA dimensions")
+    ci.add_argument("--model", default="all-MiniLM-L6-v2", help="sentence-transformers model")
     cs = c_sub.add_parser("semantic", help="semantic search over chunks")
     cs.add_argument("query")
     cs.add_argument("-k", type=int, default=8)
@@ -95,7 +99,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.corpus_cmd == "search":
             documents.search(args.term, k=args.k)
         elif args.corpus_cmd == "index":
-            embeddings.build_index()
+            embeddings.build_index(backend=args.backend, dims=args.dims, model=args.model)
         elif args.corpus_cmd == "semantic":
             embeddings.semantic_search(args.query, k=args.k)
     elif args.command == "data":
