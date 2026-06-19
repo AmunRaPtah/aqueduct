@@ -119,6 +119,19 @@ drug → trial → paper. `links protein OPRM1` shows a target's drugs, structur
 .venv/bin/python -m aqueduct links protein OPRM1       # drugs hitting it + PDB structures
 ```
 
+### Semantic-over-graph discovery
+`links discover` joins the two big subsystems: it builds a **concept profile** for a drug
+from the graph (target protein names + function, mechanism of action, trial conditions),
+then runs that profile through semantic search. Papers conceptually about the drug's
+biology surface **even when they never name the drug**, each tagged DIRECT (already a
+lexical link) or SEMANTIC (newly discovered). Requires `links build` + `corpus index`.
+
+```bash
+.venv/bin/python -m aqueduct links discover buprenorphine -k 6
+#   targets: Mu-type opioid receptor | mechanism: Mu/Kappa opioid receptor agonist
+#   -> e.g. "Opioid receptor distribution in the claustrum" (SEMANTIC — drug unnamed)
+```
+
 **Entity resolution:** canonical drug = normalised base name; match terms expand with
 ChEMBL synonyms/trade names (so "Sublocade"/"Subutex" → buprenorphine). Drug↔document
 links carry a **confidence**: a hit in title/abstract/keywords/MeSH or ≥2 full-text

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import argparse
 
-from . import (analytics, corpus, datasets, documents, embeddings, ingest, links,
-               pipeline, process, storage)
+from . import (analytics, corpus, datasets, discover, documents, embeddings, ingest,
+               links, pipeline, process, storage)
 from .sources import arxiv, chembl, clinicaltrials, europepmc, pdb, uniprot
 
 INGESTORS = {"europepmc": europepmc.ingest, "arxiv": arxiv.ingest}
@@ -66,6 +66,9 @@ def main(argv: list[str] | None = None) -> int:
     le.add_argument("drug")
     lp = l_sub.add_parser("protein", help="show drugs + structures + papers linked to a gene")
     lp.add_argument("gene")
+    ld = l_sub.add_parser("discover", help="semantic-over-graph: papers about a drug's biology")
+    ld.add_argument("drug")
+    ld.add_argument("-k", type=int, default=8)
 
     # --- synthetic events demo (original scaffold) ---
     p_run = sub.add_parser("run", help="[demo] synthetic events pipeline")
@@ -111,6 +114,8 @@ def main(argv: list[str] | None = None) -> int:
             links.explore(args.drug)
         elif args.links_cmd == "protein":
             links.explore_protein(args.gene)
+        elif args.links_cmd == "discover":
+            discover.drug(args.drug, k=args.k)
     elif args.command == "run":
         pipeline.run(n_events=args.events, seed=args.seed)
     elif args.command == "ingest":

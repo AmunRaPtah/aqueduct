@@ -106,7 +106,7 @@ def build(con: duckdb.DuckDBPyConnection | None = None) -> dict[str, int]:
         tables = {r[0] for r in con.execute("SHOW TABLES").fetchall()}
 
         # ---- entity resolution: canonical drugs + their match terms ----
-        con.execute("CREATE OR REPLACE TEMP TABLE _mol_norm "
+        con.execute("CREATE OR REPLACE TABLE entity_drug_molecules "
                     "(chembl_id TEXT, drug_norm TEXT, pref_name TEXT, max_phase DOUBLE)")
         terms: dict[str, set[str]] = {}
         cid_norm: dict[str, str] = {}
@@ -118,7 +118,8 @@ def build(con: duckdb.DuckDBPyConnection | None = None) -> dict[str, int]:
                 if not norm:
                     continue
                 cid_norm[cid] = norm
-                con.execute("INSERT INTO _mol_norm VALUES (?,?,?,?)", [cid, norm, name, phase])
+                con.execute("INSERT INTO entity_drug_molecules VALUES (?,?,?,?)",
+                            [cid, norm, name, phase])
                 terms.setdefault(norm, set()).add(norm)
         if "chembl_synonyms" in tables:
             for cid, syn in con.execute(
@@ -134,7 +135,7 @@ def build(con: duckdb.DuckDBPyConnection | None = None) -> dict[str, int]:
             CREATE OR REPLACE TABLE entity_drugs AS
             SELECT drug_norm, count(DISTINCT chembl_id) AS n_forms,
                    max(max_phase) AS max_phase, min(pref_name) AS sample_name
-            FROM _mol_norm GROUP BY drug_norm
+            FROM entity_drug_molecules GROUP BY drug_norm
             """
         )
         con.execute("CREATE OR REPLACE TABLE entity_drug_names (drug_norm TEXT, term TEXT)")
@@ -247,7 +248,7 @@ def build(con: duckdb.DuckDBPyConnection | None = None) -> dict[str, int]:
                     SELECT DISTINCT mn.drug_norm, x.molecule_chembl_id, u.accession, u.gene, x.action_type
                     FROM chembl_mechanisms x
                     JOIN uniprot_proteins u ON x.target_chembl_id = u.chembl_target
-                    JOIN _mol_norm mn ON mn.chembl_id = x.molecule_chembl_id
+                    JOIN entity_drug_molecules mn ON mn.chembl_id = x.molecule_chembl_id
                     """
                 )
             # protein -> structure, from UniProt PDB cross-references
