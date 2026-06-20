@@ -160,6 +160,19 @@ without re-fetching):
 `corpus run` = fetch → store → process → chunk → report. Sub-commands
 (`fetch`/`build`/`report`/`search`) run stages individually.
 
+### RAG API (for other systems)
+`aqueduct rag "QUERY"` returns JSON (chunks with real citations + graph context + filters)
+for a local consumer. For a **remote** consumer, `aqueduct serve` runs a stdlib HTTP API:
+
+```bash
+AQUEDUCT_API_KEY=secret aqueduct serve --host 127.0.0.1 --port 8800
+curl -H "Authorization: Bearer secret" \
+  'http://127.0.0.1:8800/retrieve?q=mu+opioid+receptor&k=5&min_score=0.3'
+```
+
+Endpoints: `/retrieve` (RAG), `/health`, `/facts`, `/discover?drug=|gene=`. Federated RAG —
+Aqueduct retrieves with its own embeddings, so callers needn't share a vector space.
+
 ### Semantic search
 Concept-level search over chunks via a pluggable embedder — default **LSA**
 (TF-IDF + truncated SVD, pure NumPy: no API key, no model download). Build the index

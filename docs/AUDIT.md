@@ -14,7 +14,7 @@ synonym graph; declarative topics-driven harvest that survives per-query failure
 ## The 5 RAG blockers
 | # | Item | Status | Notes |
 |---|------|--------|-------|
-| 1 | Retrieval/query API | 🟡 | `aqueduct rag` returns structured JSON (chunks+citations+graph) + filters. **REST/HTTP endpoint still needed for a *remote* consumer.** |
+| 1 | Retrieval/query API | ✅ | `aqueduct rag` (JSON CLI) **and** `aqueduct serve` — a stdlib HTTP API (`/retrieve`, `/health`, `/facts`, `/discover`) with bearer auth, for remote consumers (the Pardalos bot). |
 | 2 | Chunk-level metadata | 🟡 | `sec_type`/`sec_title` exist + exposed; finer flags (is_methods/results, figure/table counts, ordinal) open. |
 | 3 | Index versioning/validation | ✅ | Index now stamps `index_version/backend/dims/n_chunks/corpus_hash`; `index_info()` exposes it. |
 | 4 | Idempotency / orphaned embeddings | 🟡 | Incremental embedding reuses unchanged chunks by hash; a `corpus_state` hash-check to auto-skip/rebuild is open. |
