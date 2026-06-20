@@ -95,6 +95,10 @@ def main(argv: list[str] | None = None) -> int:
     rg.add_argument("--source", action="append", help="restrict to source(s); repeatable")
     rg.add_argument("--section", action="append", help="restrict to sec_type(s) e.g. abstract")
 
+    sv = sub.add_parser("serve", help="run the HTTP retrieval API (for remote consumers)")
+    sv.add_argument("--host", default="127.0.0.1")
+    sv.add_argument("--port", type=int, default=8800)
+
     # --- topic-driven harvest (the systematic, list-based trigger) ---
     hv = sub.add_parser("harvest", help="run all queries from a topics file, then build")
     hv.add_argument("--topics", default="topics.json", help="path to a topics JSON file")
@@ -158,6 +162,9 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(rag.retrieve(
             args.query, k=args.k, graph=not args.no_graph, min_score=args.min_score,
             sources=args.source, sec_types=args.section), indent=2))
+    elif args.command == "serve":
+        from . import server
+        server.serve(host=args.host, port=args.port)
     elif args.command == "harvest":
         topics = json.loads(Path(args.topics).read_text())
         harvest.harvest(topics, limit=args.limit, build=not args.no_build)
