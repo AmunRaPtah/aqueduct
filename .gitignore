@@ -7,6 +7,9 @@ data/
 # personal harvest watchlist (copy from topics.example.json)
 topics.json
 
+# local secrets (API keys, recipient) — never commit
+.secrets.env
+
 # python
 __pycache__/
 *.py[cod]

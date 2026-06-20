@@ -80,6 +80,8 @@ def main(argv: list[str] | None = None) -> int:
     rp.add_argument("--agent", action="store_true",
                     help="bounded agentic Claude-on-DeepSeek deep analysis (more tokens)")
     rp.add_argument("--model", default="pro", help="pro (default) or flash")
+    rp.add_argument("--email", action="store_true", help="email the report (Resend)")
+    rp.add_argument("--to", default=None, help="recipient (default AQUEDUCT_EMAIL_TO)")
     sub.add_parser("facts", help="print the computed metrics (no LLM, no tokens)")
 
     # --- topic-driven harvest (the systematic, list-based trigger) ---
@@ -134,7 +136,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.corpus_cmd == "semantic":
             embeddings.semantic_search(args.query, k=args.k)
     elif args.command == "report":
-        reports.generate(args.topic, agent=args.agent, model=args.model)
+        reports.generate(args.topic, agent=args.agent, model=args.model,
+                         email=args.email, to=args.to)
     elif args.command == "facts":
         print(analysis.facts_sheet())
     elif args.command == "harvest":

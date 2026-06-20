@@ -19,7 +19,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import analysis, config, embeddings, llm
+from . import analysis, config, embeddings, llm, mailer
 from .storage import connect
 
 SYSTEM = (
@@ -125,8 +125,8 @@ def _save(topic: str | None, md: str) -> Path:
 
 
 def generate(topic: str | None = None, *, agent: bool = False, con=None,
-             model: str = "pro") -> dict:
-    """Produce a grounded report. Returns {'path', 'markdown', 'mode'}."""
+             model: str = "pro", email: bool = False, to: str | None = None) -> dict:
+    """Produce a grounded report. Returns {'path', 'markdown', 'mode', 'emailed'}."""
     owns = con is None
     con = con or connect()
     try:
@@ -143,7 +143,15 @@ def generate(topic: str | None = None, *, agent: bool = False, con=None,
         md = _compose(topic, narrative, sheet, cites)
         path = _save(topic, md)
         print(f"[report]  {mode} -> {path}")
-        return {"path": str(path), "markdown": md, "mode": mode}
+        emailed = None
+        if email:
+            subject = f"Aqueduct report — {topic}" if topic else "Aqueduct landscape report"
+            try:
+                emailed = mailer.send(subject, md, to=to)
+                print(f"[report]  emailed (id {emailed})")
+            except mailer.MailUnavailable as e:
+                print(f"[report]  email skipped: {e}")
+        return {"path": str(path), "markdown": md, "mode": mode, "emailed": emailed}
     finally:
         if owns:
             con.close()

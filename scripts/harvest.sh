@@ -5,10 +5,12 @@
 PROJECT="/root/projects/aqueduct"
 cd "$PROJECT" || exit 1
 
-# Polite-pool identifiers (APIs ask for a contact). Optional patent key.
+# Local secrets (RESEND_API_KEY, AQUEDUCT_EMAIL_TO, PATENTSVIEW_API_KEY) — untracked.
+[ -f "$PROJECT/.secrets.env" ] && . "$PROJECT/.secrets.env"
+
+# Polite-pool identifiers (APIs ask for a contact).
 export NCBI_EMAIL="${NCBI_EMAIL:-work@supercriticalbooks.com}"
 export OPENALEX_MAILTO="${OPENALEX_MAILTO:-work@supercriticalbooks.com}"
-# export PATENTSVIEW_API_KEY="..."   # set to enable the patents source
 
 TOPICS="${TOPICS:-$PROJECT/topics.json}"
 LIMIT="${LIMIT:-25}"
