@@ -25,6 +25,7 @@ DATASETS = {
     "pdb": [("pdb/structures.jsonl", "pdb_structures")],
     "pubchem": [("pubchem/compounds.jsonl", "pubchem_compounds")],
     "ensembl": [("ensembl/genes.jsonl", "ensembl_genes")],
+    "bindingdb": [("bindingdb/affinities.jsonl", "binding_affinities")],
 }
 
 
@@ -148,6 +149,17 @@ def report(con: duckdb.DuckDBPyConnection | None = None) -> None:
                 "SELECT gene, ensembl_id, chromosome, biotype FROM ensembl_genes LIMIT 5"
             ).fetchall():
                 print(f"     {str(gene):10} {eid}  chr{chrom}  {bt}")
+            print()
+
+        if _has_table(con, "binding_affinities"):
+            shown = True
+            n = con.execute("SELECT count(*) FROM binding_affinities").fetchone()[0]
+            print(f"binding_affinities: {n} rows")
+            for at, c, best in con.execute(
+                "SELECT affinity_type, count(*), round(min(affinity_nm),1) "
+                "FROM binding_affinities GROUP BY affinity_type ORDER BY count(*) DESC LIMIT 5"
+            ).fetchall():
+                print(f"     {str(at):8} {c:5}  best={best} nM")
             print()
 
         if not shown:

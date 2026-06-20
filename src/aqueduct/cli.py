@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import json
+from pathlib import Path
 
-from . import (analytics, corpus, datasets, discover, documents, embeddings, ingest,
-               links, pipeline, process, storage)
-from .sources import (arxiv, chembl, clinicaltrials, ensembl, europepmc, openalex,
-                      patents, pdb, pubchem, uniprot)
+from . import (analytics, corpus, datasets, discover, documents, embeddings, harvest,
+               ingest, links, pipeline, process, storage)
+from .sources import (arxiv, bindingdb, chembl, clinicaltrials, ensembl, europepmc,
+                      openalex, patents, pdb, pubchem, uniprot)
 
 INGESTORS = {
     "europepmc": europepmc.ingest,
@@ -22,6 +24,7 @@ DATA_INGESTORS = {
     "pdb": pdb.ingest,
     "pubchem": pubchem.ingest,
     "ensembl": ensembl.ingest,
+    "bindingdb": bindingdb.ingest,
 }
 
 
@@ -71,6 +74,12 @@ def main(argv: list[str] | None = None) -> int:
     d_sub.add_parser("build", help="load landing-zone records into typed tables")
     d_sub.add_parser("report", help="print the structured-data report")
 
+    # --- topic-driven harvest (the systematic, list-based trigger) ---
+    hv = sub.add_parser("harvest", help="run all queries from a topics file, then build")
+    hv.add_argument("--topics", default="topics.json", help="path to a topics JSON file")
+    hv.add_argument("--limit", type=int, default=25, help="max results per query")
+    hv.add_argument("--no-build", action="store_true", help="ingest only; skip rebuild")
+
     # --- cross-source entity links (drug <-> trial <-> paper) ---
     l_grp = sub.add_parser("links", help="cross-source entity links")
     l_sub = l_grp.add_subparsers(dest="links_cmd", required=True)
@@ -116,6 +125,9 @@ def main(argv: list[str] | None = None) -> int:
             embeddings.build_index(backend=args.backend, dims=args.dims, model=args.model)
         elif args.corpus_cmd == "semantic":
             embeddings.semantic_search(args.query, k=args.k)
+    elif args.command == "harvest":
+        topics = json.loads(Path(args.topics).read_text())
+        harvest.harvest(topics, limit=args.limit, build=not args.no_build)
     elif args.command == "data":
         if args.data_cmd == "fetch":
             DATA_INGESTORS[args.source](args.query, limit=args.limit)

@@ -1,0 +1,28 @@
+{
+  "_comment": "Aqueduct topics file. Edit, then run: aqueduct harvest --topics topics.example.json. Each list entry is one search. Empty string = enrich from already-landed data (pdb/ensembl/bindingdb). Keep uniprot before pdb/ensembl/bindingdb.",
+  "documents": {
+    "europepmc": [
+      "mu opioid receptor signaling",
+      "epigenetics addiction",
+      "buprenorphine opioid use disorder treatment"
+    ],
+    "openalex": [
+      "mathematical modeling of neural dynamics",
+      "topological data analysis",
+      "first principles density functional theory"
+    ],
+    "arxiv": [
+      "neural engineering brain computer interface",
+      "computational models of addiction"
+    ]
+  },
+  "structured": {
+    "chembl": ["opioid", "stimulant"],
+    "clinicaltrials": ["opioid use disorder", "addiction"],
+    "uniprot": ["opioid receptor", "dopamine receptor"],
+    "pubchem": ["naloxone", "buprenorphine"],
+    "pdb": [""],
+    "ensembl": [""],
+    "bindingdb": [""]
+  }
+}

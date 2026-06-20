@@ -80,6 +80,7 @@ tables per source; cross-source links are a later step).
 | `pdb` | protein structures (enriches UniProt refs) | `pdb_structures` |
 | `pubchem` | compounds / cheminformatics | `pubchem_compounds` |
 | `ensembl` | genomics (gene location/biotype) | `ensembl_genes` |
+| `bindingdb` | drug–target binding affinities (Ki/IC50) | `binding_affinities` |
 
 `data fetch --source ensembl` with no `--query` enriches the genes already in the UniProt
 landing zone. Graph links: `link_drug_pubchem` (ChEMBL ↔ PubChem by InChIKey) and
@@ -195,6 +196,29 @@ and registering it in `BACKENDS` — storage, search, and discovery are backend-
 Drop a new connector in `src/aqueduct/sources/` that lands `<id>.xml` files plus a
 `manifest.jsonl` under `data/raw/<source>/`. `store_documents` picks up every
 source's manifest automatically — patents (PatentsView), preprints, etc.
+
+## Harvest (topic-driven ingestion)
+
+Queries are **not** scraped or hard-coded — you drive them. Either run a single
+`fetch`, or define a **topics file** and let one command run them all and rebuild
+everything. This is the systematic, repeatable trigger (and is easy to schedule via
+cron / the `loop` skill).
+
+```bash
+cp topics.example.json topics.json     # edit the searches per source
+aqueduct harvest --topics topics.json --limit 25
+```
+
+```jsonc
+{
+  "documents":  { "openalex": ["topological data analysis"], "europepmc": ["..."] },
+  "structured": { "chembl": ["opioid"], "uniprot": ["opioid receptor"], "bindingdb": [""] }
+}
+```
+
+`harvest` runs every `(source, query)`, accumulates incrementally (re-runs are
+idempotent), then rebuilds the corpus, datasets, links, and semantic index. An empty
+string means "enrich from already-landed data" (pdb/ensembl/bindingdb).
 
 ## Tests
 
