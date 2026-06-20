@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 
 from . import (analysis, analytics, corpus, datasets, discover, documents, embeddings,
-               harvest, ingest, links, pipeline, process, reports, storage)
+               harvest, ingest, links, pipeline, process, rag, reports, storage)
 from .sources import (arxiv, bindingdb, chembl, clinicaltrials, ensembl, europepmc,
                       openalex, patents, pdb, pubchem, uniprot)
 
@@ -63,6 +63,7 @@ def main(argv: list[str] | None = None) -> int:
     cs = c_sub.add_parser("semantic", help="semantic search over chunks")
     cs.add_argument("query")
     cs.add_argument("-k", type=int, default=8)
+    cs.add_argument("--json", action="store_true", help="emit JSON (for programmatic use)")
 
     # --- structured datasets (ChEMBL, ...) ---
     d_grp = sub.add_parser("data", help="structured datasets (ChEMBL, clinical, ...)")
@@ -82,7 +83,14 @@ def main(argv: list[str] | None = None) -> int:
     rp.add_argument("--model", default="pro", help="pro (default) or flash")
     rp.add_argument("--email", action="store_true", help="email the report (Resend)")
     rp.add_argument("--to", default=None, help="recipient (default AQUEDUCT_EMAIL_TO)")
-    sub.add_parser("facts", help="print the computed metrics (no LLM, no tokens)")
+    fp = sub.add_parser("facts", help="print the computed metrics (no LLM, no tokens)")
+    fp.add_argument("--json", action="store_true", help="emit JSON")
+
+    # --- RAG retrieval surface for other systems (e.g. the Pardalos agent) ---
+    rg = sub.add_parser("rag", help="JSON RAG context (chunks + citations + graph) for a query")
+    rg.add_argument("query")
+    rg.add_argument("-k", type=int, default=8)
+    rg.add_argument("--no-graph", action="store_true", help="skip graph context")
 
     # --- topic-driven harvest (the systematic, list-based trigger) ---
     hv = sub.add_parser("harvest", help="run all queries from a topics file, then build")
@@ -134,12 +142,17 @@ def main(argv: list[str] | None = None) -> int:
         elif args.corpus_cmd == "index":
             embeddings.build_index(backend=args.backend, dims=args.dims, model=args.model)
         elif args.corpus_cmd == "semantic":
-            embeddings.semantic_search(args.query, k=args.k)
+            if args.json:
+                print(json.dumps(rag.retrieve(args.query, k=args.k, graph=False), indent=2))
+            else:
+                embeddings.semantic_search(args.query, k=args.k)
     elif args.command == "report":
         reports.generate(args.topic, agent=args.agent, model=args.model,
                          email=args.email, to=args.to)
     elif args.command == "facts":
-        print(analysis.facts_sheet())
+        print(json.dumps(analysis.facts(), indent=2) if args.json else analysis.facts_sheet())
+    elif args.command == "rag":
+        print(json.dumps(rag.retrieve(args.query, k=args.k, graph=not args.no_graph), indent=2))
     elif args.command == "harvest":
         topics = json.loads(Path(args.topics).read_text())
         harvest.harvest(topics, limit=args.limit, build=not args.no_build)
