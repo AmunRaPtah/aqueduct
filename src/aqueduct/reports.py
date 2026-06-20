@@ -67,6 +67,9 @@ def _prompt(sheet: str, snippets: str, topic: str | None) -> str:
                  "insight — do NOT summarize them; cite by [id])\n" + snippets + "\n")
     body += (
         "\nWrite the strategy memo with EXACTLY these sections:\n"
+        "0. **Executive summary** — FIRST, 4-5 dense bullets, each ONE bold, punchy novel "
+        "insight or opportunity (the highest-value takeaways), readable in 20 seconds, no "
+        "fluff. This is the part that matters most; make every bullet count.\n"
         "1. **Novel insights** — 4-6 non-obvious findings from connecting the data. For "
         "each: the insight in one bold line, then the supporting numbers/links, then why "
         "it is not obvious.\n"

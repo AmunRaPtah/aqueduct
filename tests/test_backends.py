@@ -64,6 +64,40 @@ def test_auto_backend_resolves_in_build_index(con, env, monkeypatch):
     assert meta["backend"] == "lsa"
 
 
+class _CountingStub(_StubEmbedder):
+    """Stub that records how many texts it embeds, to prove incrementality."""
+    name = "counting"
+    embedded: list = []
+
+    def transform(self, texts):
+        _CountingStub.embedded.append(len(texts))
+        return super().transform(list(texts))
+
+
+def test_incremental_reuses_unchanged_vectors(con, env, monkeypatch):
+    import seed
+    from aqueduct import corpus, embeddings
+    monkeypatch.setitem(embeddings.BACKENDS, "counting", _CountingStub)
+    _CountingStub.embedded = []
+
+    seed.seed_document("PMC1", abstract="alpha beta " * 3,
+                       sections=[("B", "alpha beta gamma " * 8)])
+    corpus.build(con)
+    n1 = embeddings.build_index(con, backend="counting")
+    first = sum(_CountingStub.embedded)
+    assert first == n1 and n1 > 0           # first build embeds everything
+
+    _CountingStub.embedded = []
+    seed.seed_document("PMC2", abstract="delta epsilon " * 3,
+                       sections=[("B", "delta epsilon zeta " * 8)])
+    corpus.build(con)
+    n2 = embeddings.build_index(con, backend="counting", incremental=True)
+    second = sum(_CountingStub.embedded)
+    # only the NEW doc's chunks are embedded; PMC1's are reused
+    assert 0 < second < n2
+    assert second == n2 - n1                # exactly the new chunks
+
+
 def test_registry_dispatch_and_unknown():
     assert "lsa" in embeddings.BACKENDS and "st" in embeddings.BACKENDS
     assert isinstance(embeddings.make_embedder("lsa", dims=4), embeddings.LsaEmbedder)

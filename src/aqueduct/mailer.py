@@ -68,7 +68,8 @@ def md_to_html(md: str) -> str:
         elif re.match(r"\s*[-*]\s+", ln):
             items = []
             while i < len(lines) and re.match(r"\s*[-*]\s+", lines[i]):
-                items.append(f"<li>{_inline(re.sub(r'^\s*[-*]\s+', '', lines[i]))}</li>")
+                item = _inline(re.sub(r"^\s*[-*]\s+", "", lines[i]))
+                items.append(f"<li>{item}</li>")
                 i += 1
             out.append("<ul>" + "".join(items) + "</ul>")
             continue

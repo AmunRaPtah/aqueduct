@@ -203,11 +203,20 @@ def _index_paths():
     return (config.DATA_DIR / "lsa_model.json", config.DATA_DIR / "chunk_index.npz")
 
 
+def _hash(text: str) -> str:
+    import hashlib
+    return hashlib.md5(text.encode("utf-8")).hexdigest()
+
+
 def build_index(con=None, backend: str = "auto", dims: int = 128,
-                model: str = "all-MiniLM-L6-v2") -> int:
+                model: str = "all-MiniLM-L6-v2", incremental: bool = True) -> int:
     """Embed every chunk with the chosen backend and persist the index.
 
     backend='auto' picks 'st' when sentence-transformers is installed, else 'lsa'.
+    With `incremental` and a pretrained backend (no global fit), vectors for unchanged
+    chunks are reused from the prior index and only new/changed chunks are embedded —
+    so a routine harvest re-embeds a handful of chunks, not the whole corpus. Fit-based
+    backends (LSA) always rebuild fully, since their components are corpus-global.
     """
     if backend in (None, "auto"):
         backend = default_backend()
@@ -221,23 +230,73 @@ def build_index(con=None, backend: str = "auto", dims: int = 128,
             print("[index]   no chunks to index — build the corpus first")
             return 0
         texts = [r[2] for r in rows]
+        hashes = [_hash(t) for t in texts]
         opts = {"lsa": {"dims": dims}, "st": {"model": model}}.get(backend, {})
         emb = make_embedder(backend, **opts)
-        if emb.needs_fit:
-            emb.fit(texts)
-        vecs = emb.transform(texts).astype(np.float32)
         model_path, idx_path = _index_paths()
         config.DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+        prev = _load_reusable(idx_path, backend) if (incremental and not emb.needs_fit) else None
+        if prev is None:
+            if emb.needs_fit:
+                emb.fit(texts)
+            vecs = emb.transform(texts).astype(np.float32)
+            reused = 0
+        else:
+            vecs, reused = _embed_incremental(emb, texts, hashes, rows, prev)
+
         model_path.write_text(json.dumps({"backend": emb.name, "state": emb.state()}))
-        np.savez(idx_path, vectors=vecs,
+        np.savez(idx_path, vectors=vecs, hashes=np.array(hashes),
                  pmcid=np.array([r[0] for r in rows]),
                  chunk_id=np.array([r[1] for r in rows]))
+        note = f" ({reused} reused, {len(rows) - reused} new)" if reused else ""
         print(f"[index]   embedded {len(rows)} chunks via '{emb.name}' "
-              f"({vecs.shape[1]} dims) -> {idx_path.name}")
+              f"({vecs.shape[1]} dims){note} -> {idx_path.name}")
         return len(rows)
     finally:
         if owns:
             con.close()
+
+
+def _load_reusable(idx_path, backend: str):
+    """Load a prior index if it matches the backend and carries per-chunk hashes."""
+    model_path, _ = _index_paths()
+    if not (idx_path.exists() and model_path.exists()):
+        return None
+    try:
+        meta = json.loads(model_path.read_text())
+        if meta.get("backend") != backend:
+            return None
+        data = np.load(idx_path, allow_pickle=True)
+        if "hashes" not in data:
+            return None
+        return {(str(p), int(c)): (data["vectors"][i], str(data["hashes"][i]))
+                for i, (p, c) in enumerate(zip(data["pmcid"], data["chunk_id"]))}
+    except Exception:  # noqa: BLE001 - any issue -> full rebuild
+        return None
+
+
+def _embed_incremental(emb, texts, hashes, rows, prev) -> tuple[np.ndarray, int]:
+    """Reuse vectors for unchanged (pmcid, chunk_id, hash); embed only the rest."""
+    n = len(rows)
+    todo_idx, todo_texts, reuse = [], [], {}
+    for i, (r, h) in enumerate(zip(rows, hashes)):
+        hit = prev.get((str(r[0]), int(r[1])))
+        if hit is not None and hit[1] == h:
+            reuse[i] = hit[0]
+        else:
+            todo_idx.append(i)
+            todo_texts.append(texts[i])
+    dim = next(iter(reuse.values())).shape[0] if reuse else None
+    new_vecs = emb.transform(todo_texts).astype(np.float32) if todo_texts else None
+    if dim is None and new_vecs is not None:
+        dim = new_vecs.shape[1]
+    out = np.zeros((n, dim), dtype=np.float32)
+    for i, v in reuse.items():
+        out[i] = v
+    for j, i in enumerate(todo_idx):
+        out[i] = new_vecs[j]
+    return out, len(reuse)
 
 
 def rank(query: str, k: int = 8) -> list[tuple[str, int, float]]:
