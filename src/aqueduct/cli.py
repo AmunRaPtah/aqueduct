@@ -6,8 +6,8 @@ import argparse
 import json
 from pathlib import Path
 
-from . import (analytics, corpus, datasets, discover, documents, embeddings, harvest,
-               ingest, links, pipeline, process, storage)
+from . import (analysis, analytics, corpus, datasets, discover, documents, embeddings,
+               harvest, ingest, links, pipeline, process, reports, storage)
 from .sources import (arxiv, bindingdb, chembl, clinicaltrials, ensembl, europepmc,
                       openalex, patents, pdb, pubchem, uniprot)
 
@@ -74,6 +74,14 @@ def main(argv: list[str] | None = None) -> int:
     d_sub.add_parser("build", help="load landing-zone records into typed tables")
     d_sub.add_parser("report", help="print the structured-data report")
 
+    # --- analysis + reporting (DuckDB facts + DeepSeek interpretation) ---
+    rp = sub.add_parser("report", help="grounded analysis report (facts + DeepSeek)")
+    rp.add_argument("--topic", default=None, help="focus topic (also pulls relevant excerpts)")
+    rp.add_argument("--agent", action="store_true",
+                    help="bounded agentic Claude-on-DeepSeek deep analysis (more tokens)")
+    rp.add_argument("--model", default="pro", help="pro (default) or flash")
+    sub.add_parser("facts", help="print the computed metrics (no LLM, no tokens)")
+
     # --- topic-driven harvest (the systematic, list-based trigger) ---
     hv = sub.add_parser("harvest", help="run all queries from a topics file, then build")
     hv.add_argument("--topics", default="topics.json", help="path to a topics JSON file")
@@ -125,6 +133,10 @@ def main(argv: list[str] | None = None) -> int:
             embeddings.build_index(backend=args.backend, dims=args.dims, model=args.model)
         elif args.corpus_cmd == "semantic":
             embeddings.semantic_search(args.query, k=args.k)
+    elif args.command == "report":
+        reports.generate(args.topic, agent=args.agent, model=args.model)
+    elif args.command == "facts":
+        print(analysis.facts_sheet())
     elif args.command == "harvest":
         topics = json.loads(Path(args.topics).read_text())
         harvest.harvest(topics, limit=args.limit, build=not args.no_build)
