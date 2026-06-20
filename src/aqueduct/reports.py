@@ -23,12 +23,22 @@ from . import analysis, config, embeddings, llm, mailer
 from .storage import connect
 
 SYSTEM = (
-    "You are a meticulous research analyst for a biomedical + general-science knowledge "
-    "base. You are given PRE-COMPUTED quantitative facts and literature excerpts. Your job: "
-    "interpret them — surface themes, notable patterns, research gaps/opportunities, and "
-    "non-obvious connections. Ground every claim in the provided facts or excerpts; NEVER "
-    "invent numbers, drugs, genes, or citations. Be specific and concise. Output clean "
-    "markdown with short sections."
+    "You are a research strategist and innovation analyst — NOT a summarizer. You receive "
+    "pre-computed quantitative facts (counts, links, asymmetries, gaps) about a knowledge "
+    "base plus a few evidence excerpts.\n\n"
+    "HARD RULES:\n"
+    "1. Do NOT summarize individual papers. Do NOT restate textbook or well-known facts. "
+    "Do NOT include a 'key themes in the literature' or paper-by-paper section.\n"
+    "2. EVERY point must be a NOVEL insight that no single source states: a non-obvious "
+    "connection across drugs/targets/trials/genes, a whitespace gap and why it is a "
+    "high-value opportunity, a specific testable hypothesis, or a contrarian take on where "
+    "the field's attention is misallocated.\n"
+    "3. Mine the ASYMMETRIES and GAPS hardest (e.g. a target with many structures but no "
+    "drug = druggable whitespace; a drug spanning many conditions = repurposing signal; "
+    "research-rich but untrialed drugs = translation gap). Reason about WHY and WHAT TO DO.\n"
+    "4. Be specific and grounded in the actual numbers/links; NEVER invent entities or "
+    "figures. If the data is thin, say so plainly rather than padding.\n"
+    "Output a sharp strategy memo in markdown — dense, non-obvious, actionable."
 )
 
 
@@ -50,13 +60,24 @@ def _snippets(topic: str, k: int = 8, con=None) -> tuple[str, list[tuple]]:
 
 
 def _prompt(sheet: str, snippets: str, topic: str | None) -> str:
-    focus = f"Focus the analysis on: {topic}.\n\n" if topic else "Analyse the corpus overall.\n\n"
-    body = f"{focus}## Quantitative facts\n{sheet}\n"
+    focus = f"Focus: {topic}.\n\n" if topic else "Scope: the whole knowledge base.\n\n"
+    body = f"{focus}## Quantitative facts (use these numbers; do not invent)\n{sheet}\n"
     if snippets:
-        body += f"\n## Relevant literature excerpts (cite by [id])\n{snippets}\n"
-    body += ("\nWrite the report: (1) Executive summary, (2) Key themes, (3) Notable "
-             "patterns in the numbers, (4) Research gaps & opportunities, (5) Suggested "
-             "next questions. Cite excerpt ids where relevant.")
+        body += ("\n## Evidence excerpts (use ONLY as supporting evidence for a specific "
+                 "insight — do NOT summarize them; cite by [id])\n" + snippets + "\n")
+    body += (
+        "\nWrite the strategy memo with EXACTLY these sections:\n"
+        "1. **Novel insights** — 4-6 non-obvious findings from connecting the data. For "
+        "each: the insight in one bold line, then the supporting numbers/links, then why "
+        "it is not obvious.\n"
+        "2. **Druggable & translational whitespace** — the strongest gaps/asymmetries "
+        "(undrugged-but-structurally-studied targets, research-rich-but-untrialed drugs), "
+        "and why each is a concrete opportunity.\n"
+        "3. **Testable hypotheses** — 3-5 specific, falsifiable predictions worth pursuing.\n"
+        "4. **Contrarian angle** — where the field's attention looks misallocated, per the "
+        "numbers.\n"
+        "5. **Highest-value open questions.**\n"
+        "No literature summary. No background. Lead with the most surprising thing.")
     return body
 
 
@@ -90,9 +111,12 @@ def _agentic(sheet: str, snippets: str, topic: str | None, max_turns: int = 12) 
         f"read-only SQL with: echo \"<SELECT ...>\" | python {qpy.name}  (tables incl "
         f"documents_raw, doc_clusters, doc_chunks, entity_drugs, link_drug_*, "
         f"entity_proteins, clinical_trials, binding_affinities, ensembl_genes). Keep "
-        f"queries few and targeted. Then write a structured markdown report (executive "
-        f"summary, themes, patterns, gaps/opportunities, next questions). Output ONLY the "
-        f"report as your final message. Do not invent numbers.")
+        f"queries few and targeted — look specifically for asymmetries (undrugged but "
+        f"structurally-studied targets, drugs active across unrelated conditions, "
+        f"research-rich untrialed drugs). Then write a NOVEL-INSIGHT strategy memo: novel "
+        f"cross-connections, druggable/translational whitespace, testable hypotheses, a "
+        f"contrarian angle, open questions. Do NOT summarize papers or restate known "
+        f"facts. Output ONLY the memo. Never invent numbers.")
     cmd = ["claude", "-p", task, "--model", cfg["pro"], "--max-turns", str(max_turns),
            "--add-dir", str(sandbox),
            "--allowedTools", "Read", f"Bash(python {qpy.name}:*)", f"Bash(echo:*)"]

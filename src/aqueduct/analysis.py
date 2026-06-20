@@ -112,6 +112,41 @@ def gaps(con, k: int = 8) -> dict:
     return g
 
 
+def asymmetries(con, k: int = 8) -> dict:
+    """Mismatches in the data — the raw material for novel insight, not summaries.
+
+    Structurally-studied-but-undrugged targets, research-rich-but-untrialed drugs,
+    and drugs spanning many conditions (repurposing signals).
+    """
+    a: dict = {}
+    if _has(con, "entity_proteins") and _has(con, "link_protein_structure") and _has(con, "link_drug_protein"):
+        a["structurally_studied_but_undrugged"] = _rows(con,
+            f"""SELECT p.gene, count(DISTINCT ps.pdb_id) structures,
+                       count(DISTINCT pd.pmcid) FILTER (WHERE pd.confidence='strong') papers
+                FROM entity_proteins p
+                JOIN link_protein_structure ps ON ps.gene = p.gene
+                LEFT JOIN link_protein_document pd ON pd.gene = p.gene
+                WHERE p.gene NOT IN (SELECT gene FROM link_drug_protein WHERE gene IS NOT NULL)
+                GROUP BY p.gene HAVING count(DISTINCT ps.pdb_id) >= 3
+                ORDER BY structures DESC LIMIT {k}""")
+    if _has(con, "entity_drugs") and _has(con, "link_drug_document") and _has(con, "link_drug_trial"):
+        a["research_rich_but_untrialed"] = _rows(con,
+            f"""SELECT e.drug_norm, count(DISTINCT dd.pmcid) papers, e.max_phase
+                FROM entity_drugs e JOIN link_drug_document dd USING (drug_norm)
+                WHERE dd.confidence='strong' AND e.drug_norm NOT IN
+                  (SELECT drug_norm FROM link_drug_trial WHERE in_intervention)
+                GROUP BY e.drug_norm, e.max_phase HAVING count(DISTINCT dd.pmcid) >= 3
+                ORDER BY papers DESC LIMIT {k}""")
+    if _has(con, "link_drug_trial") and _has(con, "clinical_trials"):
+        a["drugs_spanning_many_conditions"] = _rows(con,
+            f"""SELECT l.drug_norm, count(DISTINCT t.conditions) conditions
+                FROM link_drug_trial l JOIN clinical_trials t USING (nct_id)
+                WHERE t.conditions IS NOT NULL AND l.in_intervention
+                GROUP BY l.drug_norm HAVING count(DISTINCT t.conditions) >= 2
+                ORDER BY conditions DESC LIMIT {k}""")
+    return a
+
+
 def trials(con) -> dict:
     if not _has(con, "clinical_trials"):
         return {}
@@ -160,6 +195,7 @@ def facts(con=None) -> dict:
             "top_drugs": top_drugs(con),
             "top_targets": top_targets(con),
             "gaps": gaps(con),
+            "asymmetries": asymmetries(con),
             "trials": trials(con),
             "binding": binding(con),
             "topics": topics(con),
@@ -199,6 +235,16 @@ def facts_sheet(con=None) -> str:
              + ", ".join(r[0] for r in g.get("targets_without_drugs", [])) or "_none_")
     s.append("- Drugs without trials: "
              + ", ".join(r[0] for r in g.get("drugs_without_trials", [])) or "_none_")
+    a = f.get("asymmetries", {})
+    if a:
+        s.append("\n## Asymmetries (novelty signals)")
+        s.append("- Structurally studied but UNDRUGGED targets (gene, #structures, #papers): "
+                 + "; ".join(f"{r[0]}({r[1]}str,{r[2]}pap)"
+                             for r in a.get("structurally_studied_but_undrugged", [])) or "_none_")
+        s.append("- Research-rich but UNTRIALED drugs (drug, #papers): "
+                 + "; ".join(f"{r[0]}({r[1]})" for r in a.get("research_rich_but_untrialed", [])) or "_none_")
+        s.append("- Drugs spanning many conditions (repurposing) (drug, #conditions): "
+                 + "; ".join(f"{r[0]}({r[1]})" for r in a.get("drugs_spanning_many_conditions", [])) or "_none_")
     if f["trials"]:
         s.append("\n## Clinical trials by phase\n"
                  + _tbl(f["trials"].get("by_phase", []), ["phase", "n"]))
