@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from . import documents
-from .sources import arxiv, europepmc
+from .sources import arxiv, europepmc, openalex, patents
 from .storage import connect
 
 INGESTORS = {
     "europepmc": europepmc.ingest,
     "arxiv": arxiv.ingest,
+    "openalex": openalex.ingest,
+    "patents": patents.ingest,
 }
 
 

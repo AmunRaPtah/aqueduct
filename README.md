@@ -51,6 +51,8 @@ same query is idempotent.
 |--------|--------|-----------|
 | `europepmc` | biomedical: pharma, neuro, pharmacology, epigenetics, genomics | ✅ JATS body + rich metadata (MeSH, keywords, grants, citations, abstract) |
 | `arxiv` | math, computational/mathematical modeling, emerging tech, first principles | metadata + abstract; **full PDF body** with `--fulltext` (needs `pip install -e ".[pdf]"`) |
+| `openalex` | **every discipline** (physics, CS, math, social science) + all preprint servers | metadata + abstract (keyless) |
+| `patents` | USPTO patents — chemistry, devices, ML, materials | title + abstract; needs free `PATENTSVIEW_API_KEY` |
 
 ## Structured datasets (records, not documents)
 

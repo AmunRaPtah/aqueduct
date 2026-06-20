@@ -16,7 +16,7 @@ from pathlib import Path
 import duckdb
 
 from . import config, jats
-from .sources import arxiv
+from .sources import arxiv, openalex, patents
 from .storage import connect
 
 CHUNK_WORDS = 220   # target words per chunk
@@ -24,8 +24,10 @@ CHUNK_OVERLAP = 40  # words shared between consecutive chunks
 
 # Each source lands a different raw format; parse it back with the right parser.
 PARSERS = {
-    "europepmc": jats.parse_jats,  # JATS-XML
-    "arxiv": arxiv.parse_atom,     # Atom XML
+    "europepmc": jats.parse_jats,   # JATS-XML
+    "arxiv": arxiv.parse_atom,      # Atom XML
+    "openalex": openalex.parse,     # OpenAlex JSON
+    "patents": patents.parse,       # PatentsView JSON
 }
 
 
