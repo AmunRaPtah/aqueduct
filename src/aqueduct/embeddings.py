@@ -245,7 +245,11 @@ def build_index(con=None, backend: str = "auto", dims: int = 128,
         else:
             vecs, reused = _embed_incremental(emb, texts, hashes, rows, prev)
 
-        model_path.write_text(json.dumps({"backend": emb.name, "state": emb.state()}))
+        corpus_hash = _hash("".join(f"{r[0]}:{r[1]}:{h}" for r, h in zip(rows, hashes)))
+        model_path.write_text(json.dumps({
+            "index_version": 1, "backend": emb.name, "state": emb.state(),
+            "dims": int(vecs.shape[1]), "n_chunks": len(rows), "corpus_hash": corpus_hash,
+        }))
         np.savez(idx_path, vectors=vecs, hashes=np.array(hashes),
                  pmcid=np.array([r[0] for r in rows]),
                  chunk_id=np.array([r[1] for r in rows]))
@@ -297,6 +301,20 @@ def _embed_incremental(emb, texts, hashes, rows, prev) -> tuple[np.ndarray, int]
     for j, i in enumerate(todo_idx):
         out[i] = new_vecs[j]
     return out, len(reuse)
+
+
+def index_info() -> dict:
+    """Version/metadata of the persisted index (or {'exists': False})."""
+    model_path, idx_path = _index_paths()
+    if not (model_path.exists() and idx_path.exists()):
+        return {"exists": False}
+    try:
+        meta = json.loads(model_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {"exists": True, "valid": False}
+    return {"exists": True, "valid": True,
+            **{k: meta.get(k) for k in ("index_version", "backend", "dims",
+                                        "n_chunks", "corpus_hash")}}
 
 
 def rank(query: str, k: int = 8) -> list[tuple[str, int, float]]:

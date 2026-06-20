@@ -13,23 +13,33 @@ from . import embeddings, links
 from .storage import connect
 
 
-def _chunks(con, query: str, k: int) -> list[dict]:
+def _chunks(con, query: str, k: int, *, min_score: float = 0.0,
+            sources: list[str] | None = None, sec_types: list[str] | None = None) -> list[dict]:
+    # over-fetch candidates, then apply metadata/score filters, then take top-k
     out = []
-    for pmcid, cid, score in embeddings.rank(query, k=k):
+    for pmcid, cid, score in embeddings.rank(query, k=k * 4):
+        if score < min_score:
+            continue
         row = con.execute(
             """
-            SELECT d.title, d.doi, d.source, d.pub_year, c.sec_title, c.text
+            SELECT d.title, d.doi, d.source, d.pub_year, c.sec_type, c.sec_title, c.text
             FROM doc_chunks c JOIN documents_raw d USING (pmcid)
             WHERE c.pmcid = ? AND c.chunk_id = ?
             """, [pmcid, cid]).fetchone()
         if not row:
             continue
-        title, doi, source, year, sec, text = row
+        title, doi, source, year, sec_type, sec, text = row
+        if sources and source not in sources:
+            continue
+        if sec_types and sec_type not in sec_types:
+            continue
         out.append({
             "id": pmcid, "title": title, "doi": doi, "source": source,
-            "year": year, "section": sec, "score": round(score, 4),
-            "text": text,
+            "year": year, "sec_type": sec_type, "section": sec,
+            "score": round(score, 4), "text": text,
         })
+        if len(out) >= k:
+            break
     return out
 
 
@@ -65,13 +75,22 @@ def _graph_context(con, query: str) -> dict:
     return ctx
 
 
-def retrieve(query: str, k: int = 8, graph: bool = True, con=None) -> dict:
-    """Return grounded RAG context for a query: {query, n, chunks[], graph}."""
+def retrieve(query: str, k: int = 8, graph: bool = True, con=None, *,
+             min_score: float = 0.0, sources: list[str] | None = None,
+             sec_types: list[str] | None = None) -> dict:
+    """Return grounded RAG context for a query: {query, n, chunks[], graph}.
+
+    Optional filters (for callers like the Pardalos agent): `min_score` (drop weak
+    matches), `sources` (e.g. ['europepmc']), `sec_types` (e.g. ['abstract']).
+    """
     owns = con is None
     con = con or connect()
     try:
-        chunks = _chunks(con, query, k)
-        result = {"query": query, "n": len(chunks), "chunks": chunks}
+        chunks = _chunks(con, query, k, min_score=min_score,
+                         sources=sources, sec_types=sec_types)
+        info = embeddings.index_info()
+        result = {"query": query, "n": len(chunks), "chunks": chunks,
+                  "index": {"backend": info.get("backend"), "n_chunks": info.get("n_chunks")}}
         if graph:
             result["graph"] = _graph_context(con, query)
         if not chunks:
