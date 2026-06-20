@@ -220,6 +220,20 @@ aqueduct harvest --topics topics.json --limit 25
 idempotent), then rebuilds the corpus, datasets, links, and semantic index. An empty
 string means "enrich from already-landed data" (pdb/ensembl/bindingdb).
 
+### Automatic (scheduled)
+`scripts/harvest.sh` is a cron-safe wrapper (sets API identifiers, file-locks against
+overlap, logs to `data/harvest.log`). Install a daily run:
+
+```bash
+pip install -e .                       # so `python -m aqueduct` works outside the repo
+cp topics.example.json topics.json     # your watchlist (gitignored)
+scripts/install-cron.sh "17 3"         # run daily at 03:17 (MIN HOUR)
+```
+
+The database then refreshes itself on schedule — no Claude, no tokens, just the pipeline.
+Set `PATENTSVIEW_API_KEY` in `scripts/harvest.sh` to include patents. Inspect runs with
+`tail -f data/harvest.log`.
+
 ## Tests
 
 Deterministic and **offline** — no network. Synthetic fixtures are seeded into a temp

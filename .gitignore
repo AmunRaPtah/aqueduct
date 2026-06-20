@@ -4,6 +4,9 @@
 # data: landing zone + warehouse
 data/
 
+# personal harvest watchlist (copy from topics.example.json)
+topics.json
+
 # python
 __pycache__/
 *.py[cod]
