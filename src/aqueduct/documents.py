@@ -89,6 +89,54 @@ def store_documents(con: duckdb.DuckDBPyConnection | None = None) -> int:
 
 
 # --------------------------------------------------------------------------- #
+# cross-source de-duplication
+# --------------------------------------------------------------------------- #
+# Preferred source per shared paper (lower = kept as the cluster's primary row).
+# Europe PMC first (full text + MeSH), then OpenAlex, arXiv, patents.
+_SOURCE_RANK = "CASE source WHEN 'europepmc' THEN 0 WHEN 'openalex' THEN 1 " \
+               "WHEN 'arxiv' THEN 2 WHEN 'patents' THEN 3 ELSE 9 END"
+
+
+def build_clusters(con: duckdb.DuckDBPyConnection | None = None) -> dict[str, int]:
+    """Cluster `documents_raw` rows that share a DOI into one canonical paper.
+
+    Builds `doc_clusters(pmcid, source, doi_norm, cluster_id, is_primary)`. Rows
+    without a DOI cluster alone. `is_primary` marks the preferred row per cluster, so
+    downstream analytics count unique papers (DISTINCT cluster_id) instead of
+    source-rows. Returns {rows, clusters, duplicates}.
+    """
+    owns = con is None
+    con = con or connect()
+    try:
+        con.execute(
+            f"""
+            CREATE OR REPLACE TABLE doc_clusters AS
+            WITH norm AS (
+                SELECT pmcid, source, nullif(lower(trim(doi)), '') AS doi_norm
+                FROM documents_raw
+            ),
+            ranked AS (
+                SELECT pmcid, source, doi_norm,
+                       coalesce(doi_norm, pmcid) AS cluster_id,
+                       row_number() OVER (PARTITION BY coalesce(doi_norm, pmcid)
+                                          ORDER BY {_SOURCE_RANK}, pmcid) AS rn
+                FROM norm
+            )
+            SELECT pmcid, source, doi_norm, cluster_id, (rn = 1) AS is_primary
+            FROM ranked
+            """
+        )
+        rows = con.execute("SELECT count(*) FROM doc_clusters").fetchone()[0]
+        clusters = con.execute("SELECT count(DISTINCT cluster_id) FROM doc_clusters").fetchone()[0]
+        dupes = rows - clusters
+        print(f"[dedup]   {rows} source-rows -> {clusters} unique papers ({dupes} cross-source dupes)")
+        return {"rows": rows, "clusters": clusters, "duplicates": dupes}
+    finally:
+        if owns:
+            con.close()
+
+
+# --------------------------------------------------------------------------- #
 # silver
 # --------------------------------------------------------------------------- #
 def process_documents(con: duckdb.DuckDBPyConnection | None = None) -> int:

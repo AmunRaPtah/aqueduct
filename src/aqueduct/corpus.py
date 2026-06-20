@@ -20,6 +20,7 @@ def build(con=None) -> None:
     con = con or connect()
     try:
         documents.store_documents(con)
+        documents.build_clusters(con)   # cross-source DOI de-duplication
         documents.process_documents(con)
         documents.chunk_documents(con)
     finally:

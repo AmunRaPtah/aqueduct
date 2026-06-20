@@ -32,6 +32,21 @@ def test_document_pipeline_end_to_end(con):
     ).fetchone()[0] == 0
 
 
+def test_cross_source_dedup_clusters_by_doi(con):
+    # same paper via two sources (shared DOI) + a distinct paper
+    seed.seed_document("PMC1", source="europepmc", doi="10.1/shared")
+    seed.seed_document("openalex:W1", source="openalex", doi="10.1/shared")
+    seed.seed_document("arXiv:2501.1", source="arxiv", doi="10.2/other")
+    documents.store_documents(con)
+    stats = documents.build_clusters(con)
+    assert stats == {"rows": 3, "clusters": 2, "duplicates": 1}
+    # the shared-DOI cluster keeps Europe PMC as its primary row
+    primary = con.execute(
+        "SELECT source FROM doc_clusters WHERE cluster_id='10.1/shared' AND is_primary"
+    ).fetchone()[0]
+    assert primary == "europepmc"
+
+
 def test_corpus_build_is_idempotent(con):
     seed.seed_document("PMC1")
     corpus.build(con)

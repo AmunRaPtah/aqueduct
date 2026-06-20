@@ -46,15 +46,15 @@ ATOM_ENTRY = (
 
 def seed_document(pmcid="PMC1", *, title="Fentanyl pharmacology",
                   abstract="A study of fentanyl.", sections=None,
-                  mesh=None, keywords=None, source="europepmc"):
+                  mesh=None, keywords=None, source="europepmc", doi="10.1/x"):
     """Write one document (JATS xml + manifest line) into the europepmc landing zone."""
     sections = sections or [("Introduction", "Background on opioids.")]
     d = config.raw_source_dir(source)
     xml = build_jats(title, abstract, sections)
-    xmlp = d / f"{pmcid}.xml"
+    xmlp = d / f"{pmcid.replace(':', '_')}.xml"
     xmlp.write_text(xml, encoding="utf-8")
     rec = {
-        "pmcid": pmcid, "pmid": None, "doi": "10.1/x", "title": title,
+        "pmcid": pmcid, "pmid": None, "doi": doi, "title": title,
         "journal": "Test Journal", "pub_year": 2025, "authors": "Doe J",
         "source": source, "query": "test", "fetched_at": _NOW, "has_body": True,
         "abstract": abstract, "mesh": mesh, "keywords": keywords,
