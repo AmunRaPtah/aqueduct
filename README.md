@@ -227,10 +227,13 @@ overlap, logs to `data/harvest.log`). Install a daily run:
 ```bash
 pip install -e .                       # so `python -m aqueduct` works outside the repo
 cp topics.example.json topics.json     # your watchlist (gitignored)
-scripts/install-cron.sh "17 3"         # run daily at 03:17 (MIN HOUR)
+scripts/install-cron.sh "17 3"         # daily at 03:17  (MIN HOUR)
+scripts/install-cron.sh "17 *"         # hourly at :17    (MIN every-hour)
 ```
 
 The database then refreshes itself on schedule — no Claude, no tokens, just the pipeline.
+**Re-runs never duplicate:** every source merges by primary key, so repeated queries only
+add genuinely new records; a file lock skips a run if the previous one is still going.
 Set `PATENTSVIEW_API_KEY` in `scripts/harvest.sh` to include patents. Inspect runs with
 `tail -f data/harvest.log`.
 
