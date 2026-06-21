@@ -21,9 +21,12 @@ refreshed and when, and `stale_queries()` can surface searches gone stale.
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 
-from . import config, corpus, datasets, embeddings, links, obs, validate
+from pathlib import Path
+
+from . import config, corpus, datasets, embeddings, links, obs, suggest, validate
 from .sources import (bindingdb, chembl, clinicaltrials, ensembl, pdb, pubchem,
                       uniprot)
 from .storage import connect
@@ -38,6 +41,31 @@ DATA_INGESTORS = {
     "ensembl": ensembl.ingest,
     "bindingdb": bindingdb.ingest,
 }
+
+
+def load_topics(path: str | Path) -> dict:
+    """Load a curated topics file and merge in its auto-generated sibling.
+
+    `suggest` writes proposals to `<path>.generated.json`; harvest runs the union of
+    both so the self-expanding queries take effect without hand-editing `topics.json`.
+    Curated queries come first and win on de-duplication.
+    """
+    curated = json.loads(Path(path).read_text())
+    generated = suggest._load(suggest.generated_path(path))
+    if not generated:
+        return curated
+    merged = {k: v for k, v in curated.items()}
+    for kind in ("documents", "structured"):
+        out = {s: list(qs) for s, qs in (curated.get(kind) or {}).items()}
+        for source, qs in (generated.get(kind) or {}).items():
+            seen = {q.lower() for q in out.get(source, [])}
+            for q in qs:
+                if q.lower() not in seen:
+                    out.setdefault(source, []).append(q)
+                    seen.add(q.lower())
+        if out:
+            merged[kind] = out
+    return merged
 
 
 def _state_path():
@@ -106,11 +134,18 @@ def _run(label: str, ingestors: dict, plan: dict, limit: int, state: dict, now: 
     return n
 
 
-def harvest(topics: dict, limit: int = 25, build: bool = True) -> dict:
-    """Run every (source, query) in `topics`, then rebuild everything."""
+def harvest(topics: dict, limit: int = 25, build: bool = True,
+            topics_path: str | Path | None = None) -> dict:
+    """Run every (source, query) in `topics`, then rebuild everything.
+
+    After the rebuild, mine the fresh corpus for new queries and append them to the
+    generated topics file (`topics_path` must be set for this self-expansion step) —
+    so the next harvest searches further than this one did.
+    """
     print("=== Aqueduct harvest ===")
     state = load_state()
     now = datetime.now(timezone.utc).isoformat()
+    suggested: list[dict] = []
     with obs.span("harvest", limit=limit):
         docs = _run("document", corpus.INGESTORS, topics.get("documents", {}), limit, state, now)
         structs = _run("structured", DATA_INGESTORS, topics.get("structured", {}), limit, state, now)
@@ -122,9 +157,23 @@ def harvest(topics: dict, limit: int = 25, build: bool = True) -> dict:
                 corpus.build(con)
                 datasets.build(con)
                 links.build(con)
-                embeddings.build_index(con)
+                # Backend is env-selectable so an unattended, memory-tight box can pin
+                # the lean keyless LSA path (~400 MB, ~90 s) instead of the heavier
+                # 'auto' -> sentence-transformers default (~1.5 GB, slow full re-embeds).
+                embeddings.build_index(con, backend=os.environ.get("AQUEDUCT_EMBED_BACKEND", "auto"))
                 validate.validate(con)
+                if topics_path is not None:
+                    try:
+                        suggested = suggest.generate(con, topics_path)
+                        if suggested:
+                            print(f"[suggest] +{len(suggested)} new queries from corpus insights "
+                                  + "-> " + suggest.generated_path(topics_path).name)
+                            for c in suggested:
+                                print(f"          {c['source']}: {c['query']!r}  ({c['reason']})")
+                    except Exception as e:  # noqa: BLE001 - suggestion is best-effort, never fail a harvest
+                        print(f"[suggest] skipped ({type(e).__name__}: {e})")
+                        obs.log("suggest.error", error_type=type(e).__name__, error=str(e))
             finally:
                 con.close()
     print("=== harvest done ===")
-    return {"documents": docs, "structured": structs}
+    return {"documents": docs, "structured": structs, "suggested": len(suggested)}

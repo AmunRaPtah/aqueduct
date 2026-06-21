@@ -12,6 +12,12 @@ cd "$PROJECT" || exit 1
 export NCBI_EMAIL="${NCBI_EMAIL:-work@supercriticalbooks.com}"
 export OPENALEX_MAILTO="${OPENALEX_MAILTO:-work@supercriticalbooks.com}"
 
+# Embedding backend for the unattended build. Default to the keyless LSA path: on this
+# memory-tight box it peaks ~400 MB and rebuilds in ~90s, whereas sentence-transformers
+# (~1.5 GB, ~30 min for a full re-embed) risks OOM under concurrent cron load and can
+# outrun the watchdog. Set AQUEDUCT_EMBED_BACKEND=st for higher-quality manual runs.
+export AQUEDUCT_EMBED_BACKEND="${AQUEDUCT_EMBED_BACKEND:-lsa}"
+
 TOPICS="${TOPICS:-$PROJECT/topics.json}"
 LIMIT="${LIMIT:-25}"
 # Hard wall-clock cap so a hung source (network/backoff) can never wedge the lock

@@ -6,6 +6,8 @@ data/
 
 # personal harvest watchlist (copy from topics.example.json)
 topics.json
+# auto-generated query expansions (regenerated from corpus insights each harvest)
+*.generated.json
 
 # local secrets (API keys, recipient) — never commit
 .secrets.env

@@ -110,6 +110,13 @@ def main(argv: list[str] | None = None) -> int:
     hv.add_argument("--limit", type=int, default=25, help="max results per query")
     hv.add_argument("--no-build", action="store_true", help="ingest only; skip rebuild")
 
+    # --- self-expanding queries (corpus insights -> next round of searches) ---
+    sg = sub.add_parser("suggest", help="propose new queries from corpus insights -> topics.generated.json")
+    sg.add_argument("--topics", default="topics.json", help="curated topics file (generated sibling written next to it)")
+    sg.add_argument("--dry-run", action="store_true", help="print proposals without writing the file")
+    sg.add_argument("--per-source", type=int, default=3, help="max new queries per source per run")
+    sg.add_argument("--total", type=int, default=40, help="cap on total generated queries")
+
     # --- data-quality validation ---
     vp = sub.add_parser("validate", help="data-quality check over the corpus (no LLM)")
     vp.add_argument("--json", action="store_true", help="emit the report as JSON")
@@ -180,8 +187,23 @@ def main(argv: list[str] | None = None) -> int:
         from . import server
         server.serve(host=args.host, port=args.port)
     elif args.command == "harvest":
-        topics = json.loads(Path(args.topics).read_text())
-        harvest.harvest(topics, limit=args.limit, build=not args.no_build)
+        topics = harvest.load_topics(args.topics)
+        harvest.harvest(topics, limit=args.limit, build=not args.no_build,
+                        topics_path=args.topics)
+    elif args.command == "suggest":
+        from . import suggest as _suggest
+        from .storage import connect as _connect
+        con = _connect()
+        try:
+            added = _suggest.generate(con, args.topics, per_source_cap=args.per_source,
+                                      total_cap=args.total, dry_run=args.dry_run)
+        finally:
+            con.close()
+        verb = "would add" if args.dry_run else "added"
+        print(f"[suggest] {verb} {len(added)} queries"
+              + ("" if args.dry_run else f" -> {_suggest.generated_path(args.topics).name}"))
+        for c in added:
+            print(f"  {c['source']:12} {c['query']!r}  ({c['reason']})")
     elif args.command == "data":
         if args.data_cmd == "fetch":
             DATA_INGESTORS[args.source](args.query, limit=args.limit)

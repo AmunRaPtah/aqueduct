@@ -1,5 +1,5 @@
 {
-  "_comment": "Aqueduct topics file. Edit, then run: aqueduct harvest --topics topics.example.json. Each list entry is one search. Empty string = enrich from already-landed data (pdb/ensembl/bindingdb). Keep uniprot before pdb/ensembl/bindingdb.",
+  "_comment": "Aqueduct topics file (curated by hand). Edit, then run: aqueduct harvest --topics topics.example.json. Each list entry is one search. Empty string = enrich from already-landed data (pdb/ensembl/bindingdb). Keep uniprot before pdb/ensembl/bindingdb. The harvest also self-expands: after each build it mines corpus insights (undrugged-but-structurally-studied targets, frequent terms, drugs lacking papers) into new queries written to a sibling <name>.generated.json, which harvest merges in automatically. Run `aqueduct suggest --dry-run` to preview, or delete entries from the generated file to drop them.",
   "documents": {
     "europepmc": [
       "mu opioid receptor signaling",

@@ -32,7 +32,7 @@ def test_harvest_dispatches_to_right_ingestors(monkeypatch, env):
               "structured": {"chembl": ["opioid"]}}
     result = harvest.harvest(topics, limit=7, build=False)
 
-    assert result == {"documents": 2, "structured": 1}
+    assert result == {"documents": 2, "structured": 1, "suggested": 0}
     assert ("doc:openalex", "q1", 7) in calls
     assert ("doc:openalex", "q2", 7) in calls
     assert ("data:chembl", "opioid", 7) in calls
