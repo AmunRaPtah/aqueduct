@@ -10,13 +10,11 @@ from __future__ import annotations
 
 import json
 import os
-import time
 import urllib.parse
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .. import config
+from .. import config, net
 from ..landing import merge_jsonl
 
 API = "https://api.openalex.org/works"
@@ -24,16 +22,8 @@ USER_AGENT = "aqueduct/0.1 (data pipeline)"
 
 
 def _get(url: str, *, retries: int = 3, timeout: int = 30) -> dict:
-    last: Exception | None = None
-    for attempt in range(retries):
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return json.loads(resp.read())
-        except Exception as e:  # noqa: BLE001
-            last = e
-            time.sleep(1.5 * (attempt + 1))
-    raise RuntimeError(f"GET failed: {url}") from last
+    """Fetch JSON via the shared resilient client (retry/backoff/rate-limit/breaker)."""
+    return net.get_json(url, timeout=timeout, retries=retries)
 
 
 def reconstruct_abstract(inv: dict | None) -> str | None:

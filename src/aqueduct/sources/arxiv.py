@@ -8,16 +8,14 @@ injected into the stored entry so the document pipeline produces full-text secti
 from __future__ import annotations
 
 import io
-import json
 import re
 import time
 import urllib.parse
-import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .. import config
+from .. import config, net
 from ..landing import merge_jsonl
 
 PDF_URL = "https://arxiv.org/pdf/{}.pdf"
@@ -33,16 +31,8 @@ ET.register_namespace("arxiv", NS["arxiv"])
 
 
 def _get(url: str, *, retries: int = 3, timeout: int = 30) -> bytes:
-    last: Exception | None = None
-    for attempt in range(retries):
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return resp.read()
-        except Exception as e:  # noqa: BLE001
-            last = e
-            time.sleep(2.0 * (attempt + 1))
-    raise RuntimeError(f"GET failed: {url}") from last
+    """HTTP GET via the shared resilient client (retry/backoff/rate-limit/breaker)."""
+    return net.get_bytes(url, timeout=timeout, retries=retries)
 
 
 def _build_query(query: str, categories: list[str] | None) -> str:
@@ -110,14 +100,28 @@ def _entry_meta(entry: ET.Element) -> dict:
     }
 
 
+def _cached_pdf(arxiv_id: str) -> bytes:
+    """Return PDF bytes for an arXiv id, downloading once and caching on disk.
+
+    arXiv asks not to re-download the same PDF; the cache makes re-harvests free and
+    lets a re-run reuse prior downloads instead of hammering the server.
+    """
+    cache = config.cache_dir("arxiv_pdf") / f"{arxiv_id.replace('/', '_')}.pdf"
+    if cache.exists() and cache.stat().st_size > 0:
+        return cache.read_bytes()
+    data = _get(PDF_URL.format(arxiv_id), timeout=60)
+    cache.write_bytes(data)
+    return data
+
+
 def extract_pdf_text(arxiv_id: str) -> str | None:
-    """Download an arXiv PDF and extract its text (needs the optional 'pdf' extra)."""
+    """Download (or reuse a cached) arXiv PDF and extract its text (needs 'pdf' extra)."""
     try:
         from pdfminer.high_level import extract_text
     except ImportError:  # pragma: no cover - environment dependent
         raise RuntimeError("full text needs pdfminer.six: pip install -e '.[pdf]'")
     try:
-        data = _get(PDF_URL.format(arxiv_id), timeout=60)
+        data = _cached_pdf(arxiv_id)
         text = extract_text(io.BytesIO(data)) or ""
     except Exception:  # noqa: BLE001 - a bad/again PDF shouldn't kill the batch
         return None

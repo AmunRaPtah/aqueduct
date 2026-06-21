@@ -250,16 +250,43 @@ add genuinely new records; a file lock skips a run if the previous one is still 
 Set `PATENTSVIEW_API_KEY` in `scripts/harvest.sh` to include patents. Inspect runs with
 `tail -f data/harvest.log`.
 
+## Reliability & operations
+
+Every connector funnels HTTP through one resilient client (`net.py`): structured
+errors (`TransientError` vs `PermanentError`), a per-host **rate limiter** that honors
+`Retry-After`/`429`, **exponential backoff with jitter**, and a per-host **circuit
+breaker** that fails fast on a dead endpoint. So a flaky upstream slows a harvest, it
+doesn't crash it.
+
+```bash
+aqueduct validate                 # data-quality pass: bad ids, empty sections, body-flag gaps…
+aqueduct validate --json          # machine-readable report (also runs inside `harvest`)
+AQUEDUCT_LOG_JSON=1 aqueduct harvest --topics topics.json   # structured JSON event log on stderr
+```
+
+Operational knobs (env):
+
+| Var | Effect |
+|-----|--------|
+| `AQUEDUCT_LOG_JSON=1` / `AQUEDUCT_LOG_FILE=…` | emit structured JSON events (retries, breaker trips, per-stage counts) |
+| `AQUEDUCT_CHUNK_WORDS` / `AQUEDUCT_CHUNK_OVERLAP` | tune retrieval granularity |
+| `AQUEDUCT_CHUNK_SENTENCE_AWARE=0` | disable sentence-boundary-aware chunking |
+
+`harvest` stamps each `(source, query)` run in `data/harvest_state.json`
+(`harvest.stale_queries()` surfaces searches gone stale), and `corpus index` skips the
+re-embed entirely when the corpus hash is unchanged (`--force` to override).
+
 ## Tests
 
 Deterministic and **offline** — no network. Synthetic fixtures are seeded into a temp
 landing zone + DuckDB warehouse, then asserted through the real pipeline functions:
 parsers, type coercion, entity normalization, the document pipeline, dataset loading,
-and the full link graph (drug ⇄ trial ⇄ paper ⇄ protein ⇄ structure).
+the full link graph (drug ⇄ trial ⇄ paper ⇄ protein ⇄ structure), the resilient HTTP
+client, chunk metadata, and the data-quality validator.
 
 ```bash
 .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest -q          # ~28 tests, a few seconds
+.venv/bin/pytest -q          # 100+ tests, ~30s
 ```
 
 **CI:** `.github/workflows/ci.yml` runs the suite on Python 3.10–3.12 on every push /

@@ -14,7 +14,8 @@ from .storage import connect
 
 
 def _chunks(con, query: str, k: int, *, min_score: float = 0.0,
-            sources: list[str] | None = None, sec_types: list[str] | None = None) -> list[dict]:
+            sources: list[str] | None = None, sec_types: list[str] | None = None,
+            kinds: list[str] | None = None) -> list[dict]:
     # over-fetch candidates, then apply metadata/score filters, then take top-k
     out = []
     for pmcid, cid, score in embeddings.rank(query, k=k * 4):
@@ -22,20 +23,25 @@ def _chunks(con, query: str, k: int, *, min_score: float = 0.0,
             continue
         row = con.execute(
             """
-            SELECT d.title, d.doi, d.source, d.pub_year, c.sec_type, c.sec_title, c.text
+            SELECT d.title, d.doi, d.source, d.pub_year, c.sec_type, c.sec_kind,
+                   c.sec_title, c.is_methods, c.is_results, c.n_figures, c.n_tables, c.text
             FROM doc_chunks c JOIN documents_raw d USING (pmcid)
             WHERE c.pmcid = ? AND c.chunk_id = ?
             """, [pmcid, cid]).fetchone()
         if not row:
             continue
-        title, doi, source, year, sec_type, sec, text = row
+        title, doi, source, year, sec_type, sec_kind, sec, is_m, is_r, n_fig, n_tab, text = row
         if sources and source not in sources:
             continue
         if sec_types and sec_type not in sec_types:
             continue
+        if kinds and sec_kind not in kinds:
+            continue
         out.append({
             "id": pmcid, "title": title, "doi": doi, "source": source,
-            "year": year, "sec_type": sec_type, "section": sec,
+            "year": year, "sec_type": sec_type, "sec_kind": sec_kind, "section": sec,
+            "is_methods": bool(is_m), "is_results": bool(is_r),
+            "n_figures": int(n_fig or 0), "n_tables": int(n_tab or 0),
             "score": round(score, 4), "text": text,
         })
         if len(out) >= k:
@@ -77,17 +83,19 @@ def _graph_context(con, query: str) -> dict:
 
 def retrieve(query: str, k: int = 8, graph: bool = True, con=None, *,
              min_score: float = 0.0, sources: list[str] | None = None,
-             sec_types: list[str] | None = None) -> dict:
+             sec_types: list[str] | None = None, kinds: list[str] | None = None) -> dict:
     """Return grounded RAG context for a query: {query, n, chunks[], graph}.
 
     Optional filters (for callers like the Pardalos agent): `min_score` (drop weak
-    matches), `sources` (e.g. ['europepmc']), `sec_types` (e.g. ['abstract']).
+    matches), `sources` (e.g. ['europepmc']), `sec_types` (e.g. ['abstract']),
+    `kinds` (IMRaD structure, e.g. ['methods', 'results']). Each returned chunk now
+    carries `sec_kind`, `is_methods`/`is_results`, and `n_figures`/`n_tables`.
     """
     owns = con is None
     con = con or connect()
     try:
-        chunks = _chunks(con, query, k, min_score=min_score,
-                         sources=sources, sec_types=sec_types)
+        chunks = _chunks(con, query, k, min_score=min_score, sources=sources,
+                         sec_types=sec_types, kinds=kinds)
         info = embeddings.index_info()
         result = {"query": query, "n": len(chunks), "chunks": chunks,
                   "index": {"backend": info.get("backend"), "n_chunks": info.get("n_chunks")}}

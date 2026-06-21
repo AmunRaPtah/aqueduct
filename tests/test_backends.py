@@ -98,6 +98,27 @@ def test_incremental_reuses_unchanged_vectors(con, env, monkeypatch):
     assert second == n2 - n1                # exactly the new chunks
 
 
+def test_build_index_skips_when_corpus_unchanged(con, env, monkeypatch):
+    import seed
+    from aqueduct import corpus
+    monkeypatch.setitem(embeddings.BACKENDS, "counting", _CountingStub)
+    _CountingStub.embedded = []
+
+    seed.seed_document("PMC1", abstract="alpha beta " * 3,
+                       sections=[("B", "alpha beta gamma " * 8)])
+    corpus.build(con)
+    n1 = embeddings.build_index(con, backend="counting")
+    assert sum(_CountingStub.embedded) == n1 > 0
+
+    _CountingStub.embedded = []
+    n2 = embeddings.build_index(con, backend="counting")   # nothing changed
+    assert n2 == n1 and sum(_CountingStub.embedded) == 0   # skipped: zero re-embeds
+
+    _CountingStub.embedded = []
+    embeddings.build_index(con, backend="counting", force=True)  # force overrides skip
+    assert sum(_CountingStub.embedded) == n1
+
+
 def test_registry_dispatch_and_unknown():
     assert "lsa" in embeddings.BACKENDS and "st" in embeddings.BACKENDS
     assert isinstance(embeddings.make_embedder("lsa", dims=4), embeddings.LsaEmbedder)

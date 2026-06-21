@@ -11,11 +11,10 @@ from __future__ import annotations
 import json
 import os
 import urllib.parse
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .. import config
+from .. import config, net
 from ..landing import merge_jsonl
 
 API = "https://search.patentsview.org/api/v1/patent/"
@@ -27,12 +26,10 @@ FIELDS = [
 
 
 def _get(url: str, key: str, *, timeout: int = 30) -> dict | None:
-    req = urllib.request.Request(
-        url, headers={"User-Agent": USER_AGENT, "X-Api-Key": key})
+    """Fetch JSON with the API key header, returning None on any network failure."""
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read())
-    except Exception:  # noqa: BLE001
+        return net.get_json(url, timeout=timeout, retries=1, headers={"X-Api-Key": key})
+    except net.NetworkError:
         return None
 
 

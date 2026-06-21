@@ -7,7 +7,8 @@ import json
 from pathlib import Path
 
 from . import (analysis, analytics, corpus, datasets, discover, documents, embeddings,
-               harvest, ingest, links, pipeline, process, rag, reports, storage)
+               harvest, ingest, links, pipeline, process, rag, reports, storage,
+               validate as validate_mod)
 from .sources import (arxiv, bindingdb, chembl, clinicaltrials, ensembl, europepmc,
                       openalex, patents, pdb, pubchem, uniprot)
 
@@ -60,6 +61,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="auto (st if installed, else lsa), or force lsa/st")
     ci.add_argument("--dims", type=int, default=128, help="LSA dimensions")
     ci.add_argument("--model", default="all-MiniLM-L6-v2", help="sentence-transformers model")
+    ci.add_argument("--force", action="store_true",
+                    help="rebuild even if the corpus is unchanged")
     cs = c_sub.add_parser("semantic", help="semantic search over chunks")
     cs.add_argument("query")
     cs.add_argument("-k", type=int, default=8)
@@ -94,6 +97,8 @@ def main(argv: list[str] | None = None) -> int:
     rg.add_argument("--min-score", type=float, default=0.0, help="drop matches below this score")
     rg.add_argument("--source", action="append", help="restrict to source(s); repeatable")
     rg.add_argument("--section", action="append", help="restrict to sec_type(s) e.g. abstract")
+    rg.add_argument("--kind", action="append",
+                    help="restrict to IMRaD kind(s) e.g. methods/results; repeatable")
 
     sv = sub.add_parser("serve", help="run the HTTP retrieval API (for remote consumers)")
     sv.add_argument("--host", default="127.0.0.1")
@@ -104,6 +109,10 @@ def main(argv: list[str] | None = None) -> int:
     hv.add_argument("--topics", default="topics.json", help="path to a topics JSON file")
     hv.add_argument("--limit", type=int, default=25, help="max results per query")
     hv.add_argument("--no-build", action="store_true", help="ingest only; skip rebuild")
+
+    # --- data-quality validation ---
+    vp = sub.add_parser("validate", help="data-quality check over the corpus (no LLM)")
+    vp.add_argument("--json", action="store_true", help="emit the report as JSON")
 
     # --- cross-source entity links (drug <-> trial <-> paper) ---
     l_grp = sub.add_parser("links", help="cross-source entity links")
@@ -147,7 +156,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.corpus_cmd == "search":
             documents.search(args.term, k=args.k)
         elif args.corpus_cmd == "index":
-            embeddings.build_index(backend=args.backend, dims=args.dims, model=args.model)
+            embeddings.build_index(backend=args.backend, dims=args.dims, model=args.model,
+                                   force=args.force)
         elif args.corpus_cmd == "semantic":
             if args.json:
                 print(json.dumps(rag.retrieve(args.query, k=args.k, graph=False), indent=2))
@@ -161,7 +171,11 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "rag":
         print(json.dumps(rag.retrieve(
             args.query, k=args.k, graph=not args.no_graph, min_score=args.min_score,
-            sources=args.source, sec_types=args.section), indent=2))
+            sources=args.source, sec_types=args.section, kinds=args.kind), indent=2))
+    elif args.command == "validate":
+        rep = validate_mod.validate(verbose=not args.json)
+        if args.json:
+            print(json.dumps(rep, indent=2))
     elif args.command == "serve":
         from . import server
         server.serve(host=args.host, port=args.port)

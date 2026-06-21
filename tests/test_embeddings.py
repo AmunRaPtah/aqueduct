@@ -34,6 +34,28 @@ def test_embedder_state_roundtrip():
     np.testing.assert_allclose(a, b, atol=1e-9)
 
 
+def test_truncated_vt_matches_exact_on_lowrank():
+    # a genuinely large matrix (triggers the randomized path) but low intrinsic rank
+    rng = np.random.default_rng(1)
+    M = rng.standard_normal((300, 150)) @ rng.standard_normal((150, 150))  # rank 150
+    M = (rng.standard_normal((300, 6)) @ rng.standard_normal((6, 150)))    # rank 6
+    k = 6
+    vt = embeddings._truncated_vt(M, k)
+    assert vt.shape == (k, 150)
+    _, _, vt_exact = np.linalg.svd(M, full_matrices=False)
+    # the two k-dim row subspaces coincide: principal-angle cosines all ~1
+    overlap = np.linalg.svd(vt @ vt_exact[:k].T, compute_uv=False)
+    assert overlap.min() > 0.999
+
+
+def test_truncated_vt_small_falls_back_to_exact():
+    rng = np.random.default_rng(2)
+    M = rng.standard_normal((6, 5))         # small -> exact path, deterministic
+    vt = embeddings._truncated_vt(M, 2)
+    _, _, e = np.linalg.svd(M, full_matrices=False)
+    np.testing.assert_allclose(np.abs(vt), np.abs(e[:2]), atol=1e-9)
+
+
 def test_build_index_and_rank(con, env):
     import seed
     from aqueduct import corpus

@@ -51,6 +51,27 @@ def test_drug_document_confidence(con):
     assert conf == "strong"
 
 
+def test_drug_document_numeric_score(con):
+    _full_graph(con)
+    # fentanyl in title/abstract + body -> high numeric score, in (0, 1]
+    score = con.execute(
+        "SELECT score FROM link_drug_document WHERE drug_norm='fentanyl' AND pmcid='PMC1'"
+    ).fetchone()[0]
+    assert 0.6 < score <= 1.0
+    # strong links score higher than weak ones across the board
+    hi = con.execute("SELECT min(score) FROM link_drug_document WHERE confidence='strong'").fetchone()[0]
+    lo = con.execute("SELECT max(score) FROM link_drug_document WHERE confidence='weak'").fetchone()[0]
+    assert lo is None or hi >= lo
+
+
+def test_stereoisomer_normalisation_collapses_to_base():
+    assert links._norm("(R)-Methadone") == "methadone"
+    assert links._norm("rac-Fenfluramine") == "fenfluramine"
+    assert links._norm("D-Amphetamine") == "amphetamine"
+    # plain names and salt-stripping still work
+    assert links._norm("Naloxone hydrochloride") == "naloxone"
+
+
 def test_drug_protein_bridge(con):
     _full_graph(con)
     row = con.execute(

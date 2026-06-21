@@ -14,11 +14,10 @@ import json
 import os
 import time
 import urllib.parse
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .. import config
+from .. import config, net
 from ..landing import merge_jsonl
 
 SEARCH_URL = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
@@ -28,17 +27,8 @@ EFETCH_DELAY = 0.34  # seconds between efetch calls -> <= 3 req/s
 
 
 def _get(url: str, *, retries: int = 3, timeout: int = 30) -> bytes:
-    """HTTP GET with a couple of retries on transient failure."""
-    last: Exception | None = None
-    for attempt in range(retries):
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return resp.read()
-        except Exception as e:  # noqa: BLE001 - retry any transient error
-            last = e
-            time.sleep(1.5 * (attempt + 1))
-    raise RuntimeError(f"GET failed after {retries} tries: {url}") from last
+    """HTTP GET via the shared resilient client (retry/backoff/rate-limit/breaker)."""
+    return net.get_bytes(url, timeout=timeout, retries=retries)
 
 
 def search(query: str, limit: int = 25) -> list[dict]:

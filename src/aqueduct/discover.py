@@ -47,9 +47,12 @@ def _profile(con, drug_norm: str) -> dict:
         WHERE l.drug_norm = ? AND t.conditions IS NOT NULL
         """, [drug_norm]).fetchall()] if "clinical_trials" in have else []
 
-    parts = list(names) + list(mechanisms) + list(conditions)
+    # Weight the profile toward the drug's biology: target proteins (the strongest
+    # disambiguator) count ×3, the drug's own names ×2, mechanisms/conditions ×1.
+    # Repetition is the knob — TF-IDF/embedding weight rises with term frequency.
+    parts = list(names) * 2 + list(mechanisms) + list(conditions)
     for pname, func, aliases in proteins:
-        parts += [p for p in (pname, func, aliases) if p]
+        parts += [p for p in (pname, func, aliases) if p] * 3
     return {
         "text": ". ".join(p for p in parts if p),
         "mechanisms": mechanisms,
@@ -95,10 +98,12 @@ def _protein_profile(con, gene_norm: str) -> dict:
         "SELECT description FROM ensembl_genes WHERE lower(gene)=? LIMIT 1",
         [gene_norm]).fetchone() if "ensembl_genes" in have else None
 
-    parts = [gene_norm]
+    # Same weighting principle as the drug profile: the protein's own identity
+    # (name/function/aliases + gene) is the target ×3; associated drugs ×2.
+    parts = [gene_norm] * 3
     if info:
-        parts += [p for p in info if p]
-    parts += drugs
+        parts += [p for p in info if p] * 3
+    parts += list(drugs) * 2
     if desc and desc[0]:
         parts.append(desc[0])
     return {"text": ". ".join(parts), "drugs": drugs,

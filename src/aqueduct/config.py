@@ -22,3 +22,10 @@ def raw_source_dir(source: str) -> Path:
     d = RAW_DIR / source
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def cache_dir(name: str) -> Path:
+    """A derived-artifact cache subdirectory (e.g. downloaded PDFs). Not the warehouse."""
+    d = DATA_DIR / "cache" / name
+    d.mkdir(parents=True, exist_ok=True)
+    return d

@@ -11,6 +11,8 @@ section boundary, each carrying its source section heading.
 from __future__ import annotations
 
 import json
+import os
+import re
 from pathlib import Path
 
 import duckdb
@@ -19,8 +21,43 @@ from . import config, jats
 from .sources import arxiv, openalex, patents
 from .storage import connect
 
-CHUNK_WORDS = 220   # target words per chunk
-CHUNK_OVERLAP = 40  # words shared between consecutive chunks
+# Chunking is configurable via env (so a deploy can tune retrieval granularity
+# without code changes); these are the defaults.
+CHUNK_WORDS = int(os.environ.get("AQUEDUCT_CHUNK_WORDS", "220"))      # target words/chunk
+CHUNK_OVERLAP = int(os.environ.get("AQUEDUCT_CHUNK_OVERLAP", "40"))   # words shared between chunks
+CHUNK_SENTENCE_AWARE = os.environ.get("AQUEDUCT_CHUNK_SENTENCE_AWARE", "1") != "0"
+
+# --- IMRaD section classification -----------------------------------------
+# Map a section heading to a canonical kind so retrieval can filter by structure
+# (e.g. "give me Methods/Results only"). Ordered: first keyword hit wins.
+_SECTION_KINDS = [
+    ("methods", ("method", "materials and methods", "experimental", "procedure",
+                 "data collection", "statistical analys", "study design")),
+    ("results", ("result", "findings")),
+    ("discussion", ("discussion",)),
+    ("conclusion", ("conclusion", "concluding", "summary")),
+    ("introduction", ("introduction", "background")),
+    ("related", ("related work", "literature review", "prior work")),
+    ("limitations", ("limitation",)),
+]
+
+
+def section_kind(sec_type: str, sec_title: str | None) -> str:
+    """Canonical IMRaD-ish kind from a section's type + heading.
+
+    title/abstract pass through; body headings are matched against keyword sets;
+    anything unrecognised stays generic 'body'.
+    """
+    if sec_type in ("title", "abstract"):
+        return sec_type
+    hay = (sec_title or "").lower()
+    for kind, keys in _SECTION_KINDS:
+        if any(k in hay for k in keys):
+            return kind
+    return "body"
+
+
+_SENT = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9(\"'])")  # sentence boundary heuristic
 
 # Each source lands a different raw format; parse it back with the right parser.
 PARSERS = {
@@ -147,25 +184,27 @@ def process_documents(con: duckdb.DuckDBPyConnection | None = None) -> int:
         con.execute(
             """
             CREATE OR REPLACE TABLE doc_sections (
-                pmcid TEXT, ordinal INTEGER, sec_type TEXT,
-                sec_title TEXT, text TEXT, n_words INTEGER
+                pmcid TEXT, ordinal INTEGER, sec_type TEXT, sec_kind TEXT,
+                sec_title TEXT, text TEXT, n_words INTEGER,
+                n_figures INTEGER, n_tables INTEGER
             )
             """
         )
         docs = con.execute("SELECT pmcid, source, raw_xml FROM documents_raw").fetchall()
-        n_sec = 0
+        rows = []
         for pmcid, source, xml in docs:
             parse = PARSERS.get(source, jats.parse_jats)
             parsed = parse(xml)
             for ordinal, sec in enumerate(parsed["sections"]):
-                con.execute(
-                    "INSERT INTO doc_sections VALUES (?,?,?,?,?,?)",
-                    [pmcid, ordinal, sec["sec_type"], sec["sec_title"],
-                     sec["text"], len(sec["text"].split())],
-                )
-                n_sec += 1
-        print(f"[process] {len(docs)} docs -> {n_sec} sections (silver)")
-        return n_sec
+                kind = section_kind(sec["sec_type"], sec.get("sec_title"))
+                rows.append(
+                    [pmcid, ordinal, sec["sec_type"], kind, sec["sec_title"],
+                     sec["text"], len(sec["text"].split()),
+                     int(sec.get("n_figures", 0)), int(sec.get("n_tables", 0))])
+        if rows:
+            con.executemany("INSERT INTO doc_sections VALUES (?,?,?,?,?,?,?,?,?)", rows)
+        print(f"[process] {len(docs)} docs -> {len(rows)} sections (silver)")
+        return len(rows)
     finally:
         if owns:
             con.close()
@@ -175,6 +214,7 @@ def process_documents(con: duckdb.DuckDBPyConnection | None = None) -> int:
 # gold
 # --------------------------------------------------------------------------- #
 def _chunk(words: list[str], size: int, overlap: int):
+    """Fixed word-window chunks with overlap (no boundary awareness)."""
     step = max(1, size - overlap)
     for i in range(0, len(words), step):
         window = words[i : i + size]
@@ -184,41 +224,88 @@ def _chunk(words: list[str], size: int, overlap: int):
             break
 
 
-def chunk_documents(con: duckdb.DuckDBPyConnection | None = None) -> int:
-    """Split abstract + body sections into `doc_chunks`. Returns chunk count."""
+def _chunk_sentences(text: str, size: int, overlap: int):
+    """Sentence-boundary-aware chunks: pack whole sentences up to `size` words,
+    carry ~`overlap` trailing words (whole sentences) into the next chunk.
+
+    Falls back to fixed word-windows for any single sentence longer than `size`
+    (e.g. unpunctuated PDF-extracted text), so chunks never grow unbounded.
+    """
+    sents = [s for s in _SENT.split(text) if s.strip()]
+    if not sents:
+        return
+    cur: list[str] = []          # words in the current window
+    carry: list[list[str]] = []  # trailing sentences to seed the next window
+    for sent in sents:
+        sw = sent.split()
+        if len(sw) > size:  # monster sentence: emit current, then hard-split it
+            if cur:
+                yield cur
+                cur = []
+            yield from _chunk(sw, size, overlap)
+            carry = []
+            continue
+        if cur and len(cur) + len(sw) > size:
+            yield cur
+            # rebuild the overlap from whole trailing sentences
+            cur = [w for s in carry for w in s]
+            carry = []
+        cur.extend(sw)
+        carry.append(sw)
+        while sum(len(s) for s in carry) > overlap and len(carry) > 1:
+            carry.pop(0)
+    if cur:
+        yield cur
+
+
+def chunk_documents(con: duckdb.DuckDBPyConnection | None = None, *,
+                    size: int = CHUNK_WORDS, overlap: int = CHUNK_OVERLAP,
+                    sentence_aware: bool = CHUNK_SENTENCE_AWARE) -> int:
+    """Split abstract + body sections into `doc_chunks`. Returns chunk count.
+
+    Each chunk carries its section's structural metadata (kind, methods/results
+    flags, figure/table counts) so retrieval can filter by document structure.
+    Chunking is sentence-boundary-aware by default and tunable via `size`/`overlap`.
+    """
     owns = con is None
     con = con or connect()
     try:
         con.execute(
             """
             CREATE OR REPLACE TABLE doc_chunks (
-                pmcid TEXT, chunk_id INTEGER, sec_type TEXT,
-                sec_title TEXT, text TEXT, n_words INTEGER
+                pmcid TEXT, chunk_id INTEGER, sec_type TEXT, sec_kind TEXT,
+                sec_title TEXT, text TEXT, n_words INTEGER,
+                is_methods BOOLEAN, is_results BOOLEAN,
+                n_figures INTEGER, n_tables INTEGER
             )
             """
         )
         sections = con.execute(
             """
-            SELECT pmcid, sec_type, sec_title, text
+            SELECT pmcid, sec_type, sec_kind, sec_title, text, n_figures, n_tables
             FROM doc_sections
             WHERE sec_type IN ('abstract', 'body')
             ORDER BY pmcid, ordinal
             """
         ).fetchall()
 
+        splitter = _chunk_sentences if sentence_aware else (
+            lambda t, s, o: _chunk(t.split(), s, o))
         counters: dict[str, int] = {}
-        n_chunks = 0
-        for pmcid, sec_type, sec_title, text in sections:
-            for window in _chunk(text.split(), CHUNK_WORDS, CHUNK_OVERLAP):
+        rows = []
+        for pmcid, sec_type, sec_kind, sec_title, text, n_fig, n_tab in sections:
+            for window in splitter(text, size, overlap):
                 cid = counters.get(pmcid, 0)
                 counters[pmcid] = cid + 1
-                con.execute(
-                    "INSERT INTO doc_chunks VALUES (?,?,?,?,?,?)",
-                    [pmcid, cid, sec_type, sec_title, " ".join(window), len(window)],
-                )
-                n_chunks += 1
-        print(f"[chunk]   {n_chunks} chunks -> doc_chunks (gold)")
-        return n_chunks
+                rows.append(
+                    [pmcid, cid, sec_type, sec_kind, sec_title, " ".join(window),
+                     len(window), sec_kind == "methods", sec_kind == "results",
+                     int(n_fig or 0), int(n_tab or 0)])
+        if rows:  # one batched insert beats tens of thousands of single-row appends
+            con.executemany(
+                "INSERT INTO doc_chunks VALUES (?,?,?,?,?,?,?,?,?,?,?)", rows)
+        print(f"[chunk]   {len(rows)} chunks -> doc_chunks (gold)")
+        return len(rows)
     finally:
         if owns:
             con.close()

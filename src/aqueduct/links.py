@@ -31,6 +31,12 @@ _SALTS = {
     "sodium", "potassium", "calcium", "bromide", "chloride", "nitrate",
     "polacrilex", "anhydrous", "base", "pamoate", "decanoate", "valerate",
 }
+# leading stereochemistry / isomer descriptors — strip so enantiomers and racemates
+# collapse onto the same canonical drug (e.g. "(R)-methadone" -> "methadone").
+_STEREO = {
+    "r", "s", "rs", "sr", "rac", "racemic", "d", "l", "dl", "ld",
+    "cis", "trans", "levo", "dextro", "es", "ar", "ent",
+}
 # generic words that are also drug/ingredient names — too noisy to match on
 _STOP = {
     "water", "oxygen", "alcohol", "glucose", "saline", "placebo", "control",
@@ -44,7 +50,7 @@ def _norm(name: str | None) -> str | None:
     if not name:
         return None
     tokens = re.findall(r"[a-z]+", name.lower())
-    base = [t for t in tokens if t not in _SALTS]
+    base = [t for t in tokens if t not in _SALTS and t not in _STEREO]
     head = (base or tokens or [""])[0]
     return head if len(head) >= 5 and head not in _STOP else None
 
@@ -73,6 +79,13 @@ _PROT_STOP = {
 }
 _GB = "(^|[^a-z0-9])"   # left boundary that also excludes digits (gene symbols have them)
 _GBR = "([^a-z0-9]|$)"  # right boundary
+
+# Numeric (0..1) confidence for a text<->document link. A metadata hit (title /
+# abstract / keywords / MeSH) is worth a strong base; body mentions add a
+# saturating bonus (one incidental mention stays low, repeated mentions approach
+# certainty) — so callers get a graded signal, not just strong/weak.
+_LINK_SCORE = ("round(least(1.0, (CASE WHEN {meta} THEN 0.6 ELSE 0 END) "
+               "+ (1 - exp(-coalesce({nbody}, 0) / 1.5)) * 0.7), 3)")
 
 
 def _protein_terms(gene: str | None, aliases: list[str]):
@@ -178,7 +191,8 @@ def build(con: duckdb.DuckDBPyConnection | None = None) -> dict[str, int]:
 
         # ---- drug <-> document (with confidence) ----
         con.execute("CREATE OR REPLACE TABLE link_drug_document "
-                    "(drug_norm TEXT, pmcid TEXT, in_metadata BOOLEAN, n_body INTEGER, confidence TEXT)")
+                    "(drug_norm TEXT, pmcid TEXT, in_metadata BOOLEAN, n_body INTEGER, "
+                    "confidence TEXT, score DOUBLE)")
         if have_docs:
             con.execute(
                 f"""
@@ -198,7 +212,8 @@ def build(con: duckdb.DuckDBPyConnection | None = None) -> dict[str, int]:
                        m.pmcid IS NOT NULL,
                        coalesce(b.n_body, 0),
                        CASE WHEN m.pmcid IS NOT NULL OR coalesce(b.n_body, 0) >= 2
-                            THEN 'strong' ELSE 'weak' END
+                            THEN 'strong' ELSE 'weak' END,
+                       {_LINK_SCORE.format(meta="m.pmcid IS NOT NULL", nbody="b.n_body")}
                 FROM meta m FULL OUTER JOIN body b
                   ON m.drug_norm = b.drug_norm AND m.pmcid = b.pmcid
                 """
@@ -220,7 +235,8 @@ def build(con: duckdb.DuckDBPyConnection | None = None) -> dict[str, int]:
                     "(drug_norm TEXT, chembl_id TEXT, accession TEXT, gene TEXT, action_type TEXT)")
         con.execute("CREATE OR REPLACE TABLE link_protein_structure (accession TEXT, gene TEXT, pdb_id TEXT)")
         con.execute("CREATE OR REPLACE TABLE link_protein_document "
-                    "(accession TEXT, gene TEXT, pmcid TEXT, in_metadata BOOLEAN, n_body INTEGER, confidence TEXT)")
+                    "(accession TEXT, gene TEXT, pmcid TEXT, in_metadata BOOLEAN, n_body INTEGER, "
+                    "confidence TEXT, score DOUBLE)")
         if have_prot:
             con.execute(
                 """
@@ -263,7 +279,7 @@ def build(con: duckdb.DuckDBPyConnection | None = None) -> dict[str, int]:
             # protein -> document, matching gene symbol + name aliases (stored patterns)
             if have_docs:
                 con.execute(
-                    """
+                    f"""
                     INSERT INTO link_protein_document
                     WITH meta AS (
                         SELECT DISTINCT n.accession, n.gene, m.pmcid
@@ -280,7 +296,8 @@ def build(con: duckdb.DuckDBPyConnection | None = None) -> dict[str, int]:
                     SELECT coalesce(m.accession, b.accession), coalesce(m.gene, b.gene),
                            coalesce(m.pmcid, b.pmcid), m.pmcid IS NOT NULL,
                            coalesce(b.n_body, 0),
-                           CASE WHEN m.pmcid IS NOT NULL OR coalesce(b.n_body,0) >= 2 THEN 'strong' ELSE 'weak' END
+                           CASE WHEN m.pmcid IS NOT NULL OR coalesce(b.n_body,0) >= 2 THEN 'strong' ELSE 'weak' END,
+                           {_LINK_SCORE.format(meta="m.pmcid IS NOT NULL", nbody="b.n_body")}
                     FROM meta m FULL OUTER JOIN body b
                       ON m.accession = b.accession AND m.pmcid = b.pmcid
                     """

@@ -73,6 +73,12 @@ class LsaEmbedder(Embedder):
     name = "lsa"
     needs_fit = True
 
+    # Above this many dense cells (n_docs × vocab) the TF-IDF matrix is built
+    # sparsely. A dense float64 array of this size is ~32 MB; the real corpus is
+    # ~100× larger (gigabytes) and ~99% zeros, so densifying it OOMs the box. Small
+    # corpora (and all tests) stay on the exact dense path, byte-for-byte unchanged.
+    _SPARSE_CELLS = 4_000_000
+
     def __init__(self, dims: int = 128, max_vocab: int = 8000, min_df: int = 2):
         self.dims = dims
         self.max_vocab = max_vocab
@@ -97,19 +103,24 @@ class LsaEmbedder(Embedder):
         for w, i in self.vocab.items():
             self.idf[i] = np.log((1 + n_docs) / (1 + df[w])) + 1.0
 
-        tfidf = self._tfidf_matrix(doc_tokens)            # (n_docs, terms)
+        tfidf = self._tfidf(doc_tokens)                   # (n_docs, terms), dense or sparse
         k = min(self.dims, min(tfidf.shape) - 1) if min(tfidf.shape) > 1 else 1
-        # truncated SVD via full SVD (corpora here are small)
-        _, _, vt = np.linalg.svd(tfidf, full_matrices=False)
+        vt = _truncated_vt(tfidf, k)                       # top-k right vectors (k, terms)
         self.components = vt[:k].T                          # (terms, k)
         return self
 
     def transform(self, texts: list[str]) -> np.ndarray:
-        tfidf = self._tfidf_matrix([_tokens(t) for t in texts])
+        tfidf = self._tfidf([_tokens(t) for t in texts])
         vecs = tfidf @ self.components                     # fold-in: x @ V_k
         return _l2norm(vecs)
 
     # --- internals ---------------------------------------------------------
+    def _tfidf(self, doc_tokens: list[list[str]]):
+        """Sparse for a large corpus, dense for a small one (same TF-IDF values)."""
+        if len(doc_tokens) * max(len(self.vocab), 1) > self._SPARSE_CELLS:
+            return self._tfidf_sparse(doc_tokens)
+        return self._tfidf_matrix(doc_tokens)
+
     def _tfidf_matrix(self, doc_tokens: list[list[str]]) -> np.ndarray:
         m = np.zeros((len(doc_tokens), len(self.vocab)), dtype=np.float64)
         for r, toks in enumerate(doc_tokens):
@@ -121,6 +132,27 @@ class LsaEmbedder(Embedder):
         np.log1p(m, out=m)
         m *= self.idf
         return m
+
+    def _tfidf_sparse(self, doc_tokens: list[list[str]]) -> "_CsrMatrix":
+        """Same weighting as `_tfidf_matrix` (count → log1p → ×idf) in CSR form."""
+        indptr = np.empty(len(doc_tokens) + 1, dtype=np.int64)
+        indptr[0] = 0
+        indices: list[int] = []
+        data: list[float] = []
+        for r, toks in enumerate(doc_tokens):
+            counts: dict[int, float] = {}
+            for w in toks:
+                j = self.vocab.get(w)
+                if j is not None:
+                    counts[j] = counts.get(j, 0.0) + 1.0
+            indices.extend(counts.keys())
+            data.extend(counts.values())
+            indptr[r + 1] = len(indices)
+        cols = np.asarray(indices, dtype=np.int32)
+        vals = np.asarray(data, dtype=np.float32)
+        np.log1p(vals, out=vals)                           # sublinear tf
+        vals *= self.idf[cols].astype(np.float32)          # idf weighting
+        return _CsrMatrix((len(doc_tokens), len(self.vocab)), indptr, cols, vals)
 
     def state(self) -> dict:
         return {"dims": self.dims, "vocab": self.vocab,
@@ -169,7 +201,10 @@ class SentenceTransformerEmbedder(Embedder):
 
     def transform(self, texts: list[str]) -> np.ndarray:
         self._ensure()
-        v = self._model.encode(list(texts), normalize_embeddings=True)
+        # bounded batch_size caps peak memory, so a full corpus re-embed (e.g. after a
+        # chunking change) streams instead of allocating one giant activation tensor.
+        v = self._model.encode(list(texts), normalize_embeddings=True,
+                               batch_size=64, show_progress_bar=False)
         return np.asarray(v, dtype=np.float32)
 
     def state(self) -> dict:
@@ -198,6 +233,116 @@ def _l2norm(x: np.ndarray) -> np.ndarray:
     return x / np.maximum(n, 1e-9)
 
 
+class _CsrMatrix:
+    """A minimal CSR sparse matrix — just enough for the LSA build.
+
+    TF-IDF over a chunk corpus is ~99% zeros: a dense ``(n_chunks, vocab)`` array is
+    gigabytes, while the sparse form is a few megabytes. Only the products the
+    randomized SVD and the fold-in need are implemented (``m @ X`` and ``mᵀ @ X``);
+    both stream in row blocks so the dense intermediate never exceeds one block.
+    """
+
+    __slots__ = ("shape", "dtype", "indptr", "indices", "data", "_block")
+
+    def __init__(self, shape, indptr, indices, data, *, block: int = 256):
+        self.shape = shape
+        self.dtype = data.dtype
+        self.indptr = indptr        # (n_rows + 1,) int64 row pointers
+        self.indices = indices      # (nnz,) int32 column indices
+        self.data = data            # (nnz,) float32 values
+        self._block = block
+
+    @property
+    def T(self) -> "_CsrT":
+        return _CsrT(self)
+
+    def __matmul__(self, X: np.ndarray) -> np.ndarray:
+        """m @ X  — X is (n_cols, p), result (n_rows, p)."""
+        X = np.asarray(X, dtype=np.float32)
+        n_rows, p = self.shape[0], X.shape[1]
+        out = np.empty((n_rows, p), dtype=np.float32)
+        for s in range(0, n_rows, self._block):
+            e = min(s + self._block, n_rows)
+            a, b = self.indptr[s], self.indptr[e]
+            contrib = self.data[a:b, None] * X[self.indices[a:b]]      # (block_nnz, p)
+            local = np.repeat(np.arange(e - s), np.diff(self.indptr[s:e + 1]))
+            blk = np.zeros((e - s, p), dtype=np.float32)
+            np.add.at(blk, local, contrib)
+            out[s:e] = blk
+        return out
+
+    def _tmatmul(self, Q: np.ndarray) -> np.ndarray:
+        """mᵀ @ Q  — Q is (n_rows, p), result (n_cols, p)."""
+        Q = np.asarray(Q, dtype=np.float32)
+        p = Q.shape[1]
+        out = np.zeros((self.shape[1], p), dtype=np.float32)
+        for s in range(0, self.shape[0], self._block):
+            e = min(s + self._block, self.shape[0])
+            a, b = self.indptr[s], self.indptr[e]
+            rows = np.repeat(np.arange(s, e), np.diff(self.indptr[s:e + 1]))
+            np.add.at(out, self.indices[a:b], self.data[a:b, None] * Q[rows])
+        return out
+
+
+class _CsrT:
+    """Lazy transpose view of a `_CsrMatrix` supporting only ``@`` (mᵀ @ X)."""
+
+    __slots__ = ("_m",)
+
+    def __init__(self, m: _CsrMatrix):
+        self._m = m
+
+    def __matmul__(self, Q: np.ndarray) -> np.ndarray:
+        return self._m._tmatmul(Q)
+
+
+def _randomized_vt(m, k: int, n_cols: int, *, oversample: int, n_iter: int) -> np.ndarray:
+    """Randomized range-finder SVD; `m` may be a dense ndarray or a `_CsrMatrix`.
+
+    Identical algorithm for both: only the matrix products differ in how they're
+    evaluated (dense BLAS vs. streamed sparse), so the dense path stays byte-for-byte
+    as before. ``Q.T @ m`` is computed as ``(mᵀ @ Q).T`` so the sparse type needs only
+    a left-multiply.
+    """
+    rng = np.random.default_rng(0)
+    p = k + oversample
+    Q, _ = np.linalg.qr(m @ rng.standard_normal((n_cols, p)).astype(np.float32))  # (n_rows, p)
+    for _ in range(n_iter):                                     # sharpen the subspace
+        Q, _ = np.linalg.qr(m.T @ Q)                            # (n_cols, p)
+        Q, _ = np.linalg.qr(m @ Q)                              # (n_rows, p)
+    _, _, vt = np.linalg.svd((m.T @ Q).T, full_matrices=False)  # SVD of small (p, n_cols)
+    return vt[:k].astype(np.float64)
+
+
+def _truncated_vt(m, k: int, *, oversample: int = 10,
+                  n_iter: int = 4) -> np.ndarray:
+    """Top-k right singular vectors V^T (shape (k, n_features)).
+
+    We only need the top k << min(shape) directions, so a *full* SVD is wasteful —
+    on a large corpus it dominates the build and OOMs (it materialises all
+    min(n_docs, n_terms) singular vectors). This uses a randomized range finder with
+    power iterations (Halko, Martinsson & Tropp 2011): O(n·terms·k) work and a few
+    small matrices instead of a full decomposition, in float32 (half the memory and
+    BLAS time of float64, ample precision for LSA). For small matrices, where the
+    approximation buys nothing and could be noisy, it falls back to an exact SVD — so
+    the test corpora (and their results) are byte-for-byte unchanged. Seeded for
+    reproducible builds.
+
+    `m` is a dense ndarray for small corpora (and in tests); for a large corpus the
+    caller passes a `_CsrMatrix` so the dense ``(n_docs, vocab)`` array — gigabytes,
+    almost all zeros — is never materialised.
+    """
+    n_rows, n_cols = m.shape
+    if isinstance(m, _CsrMatrix):                               # large, sparse corpus
+        return _randomized_vt(m, k, n_cols, oversample=oversample, n_iter=n_iter)
+    rank_cap = min(n_rows, n_cols)
+    if rank_cap <= k + oversample or rank_cap <= 16:
+        _, _, vt = np.linalg.svd(m, full_matrices=False)
+        return vt[:k]
+    m = np.asarray(m, dtype=np.float32)
+    return _randomized_vt(m, k, n_cols, oversample=oversample, n_iter=n_iter)
+
+
 # --- index persistence (sidecar under the data dir) ------------------------
 def _index_paths():
     return (config.DATA_DIR / "lsa_model.json", config.DATA_DIR / "chunk_index.npz")
@@ -208,8 +353,14 @@ def _hash(text: str) -> str:
     return hashlib.md5(text.encode("utf-8")).hexdigest()
 
 
+def _corpus_hash(rows, hashes) -> str:
+    """A stable fingerprint of the chunk corpus (ids + content hashes)."""
+    return _hash("".join(f"{r[0]}:{r[1]}:{h}" for r, h in zip(rows, hashes)))
+
+
 def build_index(con=None, backend: str = "auto", dims: int = 128,
-                model: str = "all-MiniLM-L6-v2", incremental: bool = True) -> int:
+                model: str = "all-MiniLM-L6-v2", incremental: bool = True,
+                force: bool = False) -> int:
     """Embed every chunk with the chosen backend and persist the index.
 
     backend='auto' picks 'st' when sentence-transformers is installed, else 'lsa'.
@@ -217,6 +368,10 @@ def build_index(con=None, backend: str = "auto", dims: int = 128,
     chunks are reused from the prior index and only new/changed chunks are embedded —
     so a routine harvest re-embeds a handful of chunks, not the whole corpus. Fit-based
     backends (LSA) always rebuild fully, since their components are corpus-global.
+
+    Idempotency: if the persisted index already covers this exact corpus (same backend
+    + same `corpus_hash`), the build is skipped entirely unless `force=True`. So a
+    harvest that lands nothing new costs one hash, not a full re-embed.
     """
     if backend in (None, "auto"):
         backend = default_backend()
@@ -231,12 +386,25 @@ def build_index(con=None, backend: str = "auto", dims: int = 128,
             return 0
         texts = [r[2] for r in rows]
         hashes = [_hash(t) for t in texts]
+        corpus_hash = _corpus_hash(rows, hashes)
+
+        # auto-skip: the persisted index already matches this corpus + backend
+        if not force:
+            info = index_info()
+            if (info.get("valid") and info.get("backend") == backend
+                    and info.get("corpus_hash") == corpus_hash
+                    and info.get("n_chunks") == len(rows)):
+                print(f"[index]   corpus unchanged ({len(rows)} chunks) — skipping re-embed")
+                return len(rows)
+
         opts = {"lsa": {"dims": dims}, "st": {"model": model}}.get(backend, {})
         emb = make_embedder(backend, **opts)
         model_path, idx_path = _index_paths()
         config.DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-        prev = _load_reusable(idx_path, backend) if (incremental and not emb.needs_fit) else None
+        # force => full rebuild (ignore reusable vectors); else reuse unchanged ones
+        prev = (_load_reusable(idx_path, backend)
+                if (incremental and not emb.needs_fit and not force) else None)
         if prev is None:
             if emb.needs_fit:
                 emb.fit(texts)
@@ -245,7 +413,6 @@ def build_index(con=None, backend: str = "auto", dims: int = 128,
         else:
             vecs, reused = _embed_incremental(emb, texts, hashes, rows, prev)
 
-        corpus_hash = _hash("".join(f"{r[0]}:{r[1]}:{h}" for r, h in zip(rows, hashes)))
         model_path.write_text(json.dumps({
             "index_version": 1, "backend": emb.name, "state": emb.state(),
             "dims": int(vecs.shape[1]), "n_chunks": len(rows), "corpus_hash": corpus_hash,

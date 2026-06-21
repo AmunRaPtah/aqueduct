@@ -66,13 +66,15 @@ def _sections(article: ET.Element, meta: dict) -> list[dict]:
     sections: list[dict] = []
 
     if meta["title"]:
-        sections.append({"sec_type": "title", "sec_title": None, "text": meta["title"]})
+        sections.append({"sec_type": "title", "sec_title": None, "text": meta["title"],
+                         "n_figures": 0, "n_tables": 0})
 
     for abs in article.findall(".//front//abstract"):
         txt = _text(abs)
         if txt:
             label = abs.get("abstract-type") or "abstract"
-            sections.append({"sec_type": "abstract", "sec_title": label, "text": txt})
+            sections.append({"sec_type": "abstract", "sec_title": label, "text": txt,
+                             "n_figures": 0, "n_tables": 0})
 
     body = _first(article, ".//body")
     if body is not None:
@@ -85,11 +87,14 @@ def _sections(article: ET.Element, meta: dict) -> list[dict]:
                 path = trail + ([title] if title else [])
                 direct = _WS.sub(" ", " ".join(_text(p) for p in sec.findall("p"))).strip()
                 if direct:
+                    # figures/tables attached directly to this <sec> (subsecs count their own)
                     sections.append(
                         {
                             "sec_type": "body",
                             "sec_title": " > ".join(path) or None,
                             "text": direct,
+                            "n_figures": len(sec.findall("fig")),
+                            "n_tables": len(sec.findall("table-wrap")),
                         }
                     )
                 walk(sec, path)
@@ -97,7 +102,9 @@ def _sections(article: ET.Element, meta: dict) -> list[dict]:
         # paragraphs sitting directly under <body> with no enclosing <sec>
         stray = _WS.sub(" ", " ".join(_text(p) for p in body.findall("p"))).strip()
         if stray:
-            sections.append({"sec_type": "body", "sec_title": None, "text": stray})
+            sections.append({"sec_type": "body", "sec_title": None, "text": stray,
+                             "n_figures": len(body.findall("fig")),
+                             "n_tables": len(body.findall("table-wrap"))})
         walk(body, [])
 
     return sections

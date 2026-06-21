@@ -10,11 +10,10 @@ from __future__ import annotations
 
 import json
 import time
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .. import config
+from .. import config, net
 from ..landing import merge_jsonl
 
 ENTRY = "https://data.rcsb.org/rest/v1/core/entry"
@@ -23,14 +22,11 @@ DELAY = 0.1
 
 
 def _get(url: str, *, retries: int = 3, timeout: int = 30) -> dict | None:
-    for attempt in range(retries):
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return json.loads(resp.read())
-        except Exception:  # noqa: BLE001 - 404 / transient: skip this id
-            time.sleep(0.8 * (attempt + 1))
-    return None
+    """Fetch JSON, returning None on any network failure (a 404 skips this id)."""
+    try:
+        return net.get_json(url, timeout=timeout, retries=retries)
+    except net.NetworkError:
+        return None
 
 
 def _referenced_pdb_ids() -> list[str]:

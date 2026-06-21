@@ -14,6 +14,9 @@ export OPENALEX_MAILTO="${OPENALEX_MAILTO:-work@supercriticalbooks.com}"
 
 TOPICS="${TOPICS:-$PROJECT/topics.json}"
 LIMIT="${LIMIT:-25}"
+# Hard wall-clock cap so a hung source (network/backoff) can never wedge the lock
+# past the next hourly run. Exit 124 = timed out. Kept under the 1h cron interval.
+TIMEOUT="${TIMEOUT:-45m}"
 LOG="$PROJECT/data/harvest.log"
 mkdir -p "$PROJECT/data"
 
@@ -30,8 +33,10 @@ if [ ! -f "$TOPICS" ]; then
 fi
 
 echo "=== $(date -Is) harvest start (topics=$TOPICS limit=$LIMIT) ===" >>"$LOG"
-"$PROJECT/.venv/bin/python" -m aqueduct harvest --topics "$TOPICS" --limit "$LIMIT" >>"$LOG" 2>&1
+timeout --signal=TERM --kill-after=60 "$TIMEOUT" \
+  "$PROJECT/.venv/bin/python" -m aqueduct harvest --topics "$TOPICS" --limit "$LIMIT" >>"$LOG" 2>&1
 rc=$?
+[ "$rc" = 124 ] && echo "$(date -Is) harvest TIMED OUT after $TIMEOUT (watchdog killed it)" >>"$LOG"
 echo "=== $(date -Is) harvest done (exit $rc) ===" >>"$LOG"
 
 # Keep the log bounded (last 5000 lines).
