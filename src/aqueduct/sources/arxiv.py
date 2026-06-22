@@ -42,11 +42,19 @@ def _build_query(query: str, categories: list[str] | None) -> str:
     return f"all:{query}"
 
 
-def search(query: str, limit: int = 25, categories: list[str] | None = None) -> list[ET.Element]:
-    """Return up to `limit` arXiv <entry> elements (newest first)."""
+def search(query: str, limit: int = 25, categories: list[str] | None = None,
+           cursor: str | None = None) -> tuple[list[ET.Element], str | None]:
+    """Return ``(entries, next_cursor)`` — up to `limit` arXiv <entry> elements.
+
+    `cursor` is the result offset to start from (stringified int); a previous run
+    leaves the next offset here so successive harvests page deeper into the history
+    rather than re-reading the newest page. `next_cursor` is None at end-of-results,
+    signalling the caller to restart from offset 0 next cycle (catching new submissions).
+    """
     entries: list[ET.Element] = []
     search_q = _build_query(query, categories)
-    start = 0
+    start = int(cursor) if cursor else 0
+    next_cursor: str | None = None
     while len(entries) < limit:
         page = min(100, limit - len(entries))
         params = urllib.parse.urlencode(
@@ -61,13 +69,16 @@ def search(query: str, limit: int = 25, categories: list[str] | None = None) -> 
         feed = ET.fromstring(_get(f"{API}?{params}"))
         page_entries = feed.findall("a:entry", NS)
         if not page_entries:
+            next_cursor = None  # ran off the end -> restart from the top next cycle
             break
         entries.extend(page_entries)
         start += len(page_entries)
+        next_cursor = str(start)
         if len(page_entries) < page:
+            next_cursor = None  # last (partial) page -> restart next cycle
             break
         time.sleep(PAGE_DELAY)
-    return entries[:limit]
+    return entries[:limit], next_cursor
 
 
 def _entry_meta(entry: ET.Element) -> dict:
@@ -160,15 +171,16 @@ def parse_atom(xml: str) -> dict:
 
 
 def ingest(query: str, limit: int = 25, categories: list[str] | None = None,
-           fulltext: bool = False) -> Path:
+           fulltext: bool = False, cursor: str | None = None) -> tuple[Path, str | None]:
     """Land arXiv entries (Atom XML) + a metadata manifest in the landing zone.
 
     With `fulltext=True`, the PDF is downloaded and its text injected into the stored
     entry so the document pipeline produces full-text sections (else abstract-only).
+    Resumes paging from `cursor` and returns ``(landing_dir, next_cursor)``.
     """
     src_dir = config.raw_source_dir("arxiv")
     manifest = src_dir / "manifest.jsonl"
-    entries = search(query, limit=limit, categories=categories)
+    entries, next_cursor = search(query, limit=limit, categories=categories, cursor=cursor)
     print(f"[ingest]  arxiv: {len(entries)} hits for {query!r}{' (+full text)' if fulltext else ''}")
 
     fetched_at = datetime.now(timezone.utc).isoformat()
@@ -199,4 +211,4 @@ def ingest(query: str, limit: int = 25, categories: list[str] | None = None,
         print(f"  [{i}/{len(entries)}] arXiv:{m['arxiv_id']} ({tag}) -> {xml_path.name}")
     total, added = merge_jsonl(manifest, built, "pmcid")
     print(f"[ingest]  manifest +{added} new ({total} total) -> {manifest.relative_to(config.ROOT)}")
-    return src_dir
+    return src_dir, next_cursor

@@ -62,25 +62,35 @@ def _record(w: dict) -> dict:
     }
 
 
-def search(query: str, limit: int = 25) -> list[dict]:
-    """Search OpenAlex works across all fields; returns trimmed records."""
+def search(query: str, limit: int = 25,
+           cursor: str | None = None) -> tuple[list[dict], str | None]:
+    """Search OpenAlex works across all fields.
+
+    Returns ``(records, next_cursor)``: trimmed records starting from `cursor`, plus
+    the cursor to resume from on the next run — so successive harvests page deeper
+    rather than re-reading the same first page. `next_cursor` is None at end-of-results,
+    signalling the caller to resweep from the top next cycle.
+    """
     out: list[dict] = []
-    cursor = "*"
+    mark = cursor or "*"
+    next_cursor: str | None = None
     mailto = os.environ.get("OPENALEX_MAILTO", "")
     while len(out) < limit:
         per = min(200, limit - len(out))
-        params = {"search": query, "per-page": per, "cursor": cursor}
+        params = {"search": query, "per-page": per, "cursor": mark}
         if mailto:
             params["mailto"] = mailto
         data = _get(f"{API}?{urllib.parse.urlencode(params)}")
         results = data.get("results", [])
         if not results:
+            next_cursor = None  # exhausted -> resweep from the top next cycle
             break
         out.extend(_record(w) for w in results)
-        cursor = data.get("meta", {}).get("next_cursor")
-        if not cursor:
+        mark = data.get("meta", {}).get("next_cursor")
+        next_cursor = mark
+        if not mark:
             break
-    return out[:limit]
+    return out[:limit], next_cursor
 
 
 def parse(raw: str) -> dict:
@@ -97,11 +107,15 @@ def parse(raw: str) -> dict:
     return {"meta": r, "sections": sections}
 
 
-def ingest(query: str, limit: int = 25) -> Path:
-    """Land OpenAlex works (JSON) + a metadata manifest in the landing zone."""
+def ingest(query: str, limit: int = 25,
+           cursor: str | None = None) -> tuple[Path, str | None]:
+    """Land OpenAlex works (JSON) + a metadata manifest in the landing zone.
+
+    Resumes paging from `cursor` and returns ``(landing_dir, next_cursor)``.
+    """
     src_dir = config.raw_source_dir("openalex")
     manifest = src_dir / "manifest.jsonl"
-    records = search(query, limit=limit)
+    records, next_cursor = search(query, limit=limit, cursor=cursor)
     print(f"[ingest]  openalex: {len(records)} works for {query!r}")
 
     fetched_at = datetime.now(timezone.utc).isoformat()
@@ -120,4 +134,4 @@ def ingest(query: str, limit: int = 25) -> Path:
         })
     total, added = merge_jsonl(manifest, built, "pmcid")
     print(f"[ingest]  manifest +{added} new ({total} total) -> {manifest.relative_to(config.ROOT)}")
-    return src_dir
+    return src_dir, next_cursor

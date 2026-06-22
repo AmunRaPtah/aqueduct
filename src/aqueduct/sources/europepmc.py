@@ -31,16 +31,21 @@ def _get(url: str, *, retries: int = 3, timeout: int = 30) -> bytes:
     return net.get_bytes(url, timeout=timeout, retries=retries)
 
 
-def search(query: str, limit: int = 25) -> list[dict]:
+def search(query: str, limit: int = 25,
+           cursor: str | None = None) -> tuple[list[dict], str | None]:
     """Search Europe PMC for open-access, in-EPMC, full-text articles.
 
-    Returns up to `limit` metadata records (newest first). The caller-supplied
-    `query` is AND-ed with the open-access/full-text filters so every hit can be
-    fetched as full text.
+    Returns ``(records, next_cursor)``: up to `limit` metadata records (newest first),
+    starting from `cursor` (the cursorMark a previous run left off at), plus the
+    cursorMark to resume from next time. This makes successive harvests paginate
+    *deeper* into the result set instead of re-reading the same newest page every run.
+    `next_cursor` is None when the result set is exhausted — the caller resets to the
+    top on the next cycle to pick up newly published papers.
     """
     full_query = f"({query}) AND OPEN_ACCESS:y AND IN_EPMC:y AND HAS_FT:y"
     out: list[dict] = []
-    cursor = "*"
+    mark = cursor or "*"
+    next_cursor: str | None = None
     while len(out) < limit:
         page_size = min(100, limit - len(out))
         params = urllib.parse.urlencode(
@@ -49,13 +54,14 @@ def search(query: str, limit: int = 25) -> list[dict]:
                 "format": "json",
                 "resultType": "core",  # rich metadata: MeSH, keywords, grants, citations
                 "pageSize": page_size,
-                "cursorMark": cursor,
+                "cursorMark": mark,
                 "sort": "P_PDATE_D desc",
             }
         )
         data = json.loads(_get(f"{SEARCH_URL}?{params}"))
         results = data.get("resultList", {}).get("result", [])
         if not results:
+            next_cursor = None  # end of results -> resweep from the top next cycle
             break
         for r in results:
             pmcid = r.get("pmcid")
@@ -86,11 +92,13 @@ def search(query: str, limit: int = 25) -> list[dict]:
             )
             if len(out) >= limit:
                 break
-        next_cursor = data.get("nextCursorMark")
-        if not next_cursor or next_cursor == cursor:
+        new_mark = data.get("nextCursorMark")
+        if not new_mark or new_mark == mark:
+            next_cursor = None  # reached the end of the result set
             break
-        cursor = next_cursor
-    return out
+        mark = new_mark
+        next_cursor = mark  # a valid point to resume from on the next run
+    return out, next_cursor
 
 
 def fetch_fulltext_xml(pmcid: str) -> str:
@@ -103,15 +111,17 @@ def fetch_fulltext_xml(pmcid: str) -> str:
     return _get(f"{EFETCH_URL}?{urllib.parse.urlencode(params)}").decode("utf-8", "replace")
 
 
-def ingest(query: str, limit: int = 25) -> Path:
+def ingest(query: str, limit: int = 25,
+           cursor: str | None = None) -> tuple[Path, str | None]:
     """Land raw full-text XML + a metadata manifest in the bronze landing zone.
 
     Writes one `<pmcid>.xml` per article and appends a record per article to
-    `manifest.jsonl`. Returns the source landing directory.
+    `manifest.jsonl`. Resumes paging from `cursor` and returns
+    ``(landing_dir, next_cursor)`` so the harvester can persist where to continue.
     """
     src_dir = config.raw_source_dir("europepmc")
     manifest = src_dir / "manifest.jsonl"
-    records = search(query, limit=limit)
+    records, next_cursor = search(query, limit=limit, cursor=cursor)
     print(f"[ingest]  europepmc: {len(records)} hits for {query!r}")
 
     fetched_at = datetime.now(timezone.utc).isoformat()
@@ -134,4 +144,4 @@ def ingest(query: str, limit: int = 25) -> Path:
         time.sleep(EFETCH_DELAY)
     total, added = merge_jsonl(manifest, built, "pmcid")
     print(f"[ingest]  manifest +{added} new ({total} total) -> {manifest.relative_to(config.ROOT)}")
-    return src_dir
+    return src_dir, next_cursor

@@ -7,11 +7,22 @@ ingested — no cleaning, no typing beyond what DuckDB infers. This is the durab
 
 from __future__ import annotations
 
+import os
 import time
 
 import duckdb
 
 from . import config
+
+# Bound DuckDB's appetite. Its DEFAULT memory_limit is 80% of system RAM (~6.2 GB on
+# this 7.8 GB box) with one thread per core — i.e. it assumes it owns the machine. On a
+# shared box already running a media stack that overcommits RAM and the kernel OOM-kills
+# the harvest mid-build (see the 2026-06-22 incident). Capping memory_limit makes DuckDB
+# *spill its hash joins/aggregations to `temp_directory` on disk* instead of allocating
+# past the ceiling, so the build stays within the harvest's 1.5 GB cgroup scope and never
+# triggers a global OOM. Both knobs are env-overridable for one-off heavy manual runs.
+_DB_MEMORY_LIMIT = os.environ.get("AQUEDUCT_DB_MEMORY_LIMIT", "1GB")
+_DB_THREADS = os.environ.get("AQUEDUCT_DB_THREADS", "2")
 
 
 def connect(retries: int = 8, wait: float = 4.0) -> duckdb.DuckDBPyConnection:
@@ -22,10 +33,13 @@ def connect(retries: int = 8, wait: float = 4.0) -> duckdb.DuckDBPyConnection:
     instead of failing.
     """
     config.ensure_dirs()
+    # Spill to disk under the data dir (not CWD) when the memory cap is hit.
+    cfg = {"memory_limit": _DB_MEMORY_LIMIT, "threads": _DB_THREADS,
+           "temp_directory": str(config.DATA_DIR / ".duckdb_tmp")}
     last: Exception | None = None
     for _ in range(retries):
         try:
-            return duckdb.connect(str(config.WAREHOUSE))
+            return duckdb.connect(str(config.WAREHOUSE), config=cfg)
         except duckdb.IOException as e:  # lock held by another process
             last = e
             time.sleep(wait)

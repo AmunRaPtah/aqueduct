@@ -20,6 +20,7 @@ refreshed and when, and `stale_queries()` can surface searches gone stale.
 
 from __future__ import annotations
 
+import inspect
 import json
 import os
 from datetime import datetime, timezone
@@ -108,6 +109,18 @@ def stale_queries(state: dict | None = None, *, days: float = 7.0,
     return sorted(out, key=lambda t: -t[2])
 
 
+def _accepts_cursor(fn) -> bool:
+    """True if `fn` takes a `cursor` kwarg — i.e. it paginates across runs.
+
+    Lets `_run` stay generic: paginating document ingestors get their resume cursor
+    threaded in/out, while structured ingestors (and test mocks) are called as before.
+    """
+    try:
+        return "cursor" in inspect.signature(fn).parameters
+    except (TypeError, ValueError):  # builtins / un-introspectable callables
+        return False
+
+
 def _run(label: str, ingestors: dict, plan: dict, limit: int, state: dict, now: str) -> int:
     n = 0
     for source, queries in (plan or {}).items():
@@ -116,11 +129,18 @@ def _run(label: str, ingestors: dict, plan: dict, limit: int, state: dict, now: 
             print(f"  ! unknown {label} source: {source}")
             obs.log("harvest.unknown_source", kind=label, source=source)
             continue
+        paged = _accepts_cursor(ing)
         for q in queries:
             key = f"{source}\t{q}"
             rec = state.setdefault(key, {"runs": 0, "last_run": None, "last_ok": None})
             try:
-                ing(q, limit=limit)
+                if paged:
+                    # resume where the last run stopped; persist where this one stopped
+                    result = ing(q, limit=limit, cursor=rec.get("cursor"))
+                    if isinstance(result, tuple) and len(result) == 2:
+                        rec["cursor"] = result[1]
+                else:
+                    ing(q, limit=limit)
                 rec["last_ok"] = True
                 n += 1
                 obs.log("harvest.query", kind=label, source=source, query=q, ok=True)

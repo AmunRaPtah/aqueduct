@@ -19,7 +19,11 @@ export OPENALEX_MAILTO="${OPENALEX_MAILTO:-work@supercriticalbooks.com}"
 export AQUEDUCT_EMBED_BACKEND="${AQUEDUCT_EMBED_BACKEND:-lsa}"
 
 TOPICS="${TOPICS:-$PROJECT/topics.json}"
-LIMIT="${LIMIT:-25}"
+# Per-query page size PER RUN. Ingestors now persist a pagination cursor in
+# harvest_state.json, so each hourly run pages *deeper* into each source instead of
+# re-reading the newest page. A smaller page keeps every run cheap (less full-text
+# efetch / PDF work → no more 45m timeouts) while the corpus still grows every hour.
+LIMIT="${LIMIT:-15}"
 # Hard wall-clock cap so a hung source (network/backoff) can never wedge the lock
 # past the next hourly run. Exit 124 = timed out. Kept under the 1h cron interval.
 TIMEOUT="${TIMEOUT:-45m}"
@@ -39,7 +43,12 @@ if [ ! -f "$TOPICS" ]; then
 fi
 
 echo "=== $(date -Is) harvest start (topics=$TOPICS limit=$LIMIT) ===" >>"$LOG"
-timeout --signal=TERM --kill-after=60 "$TIMEOUT" \
+# Hard memory ceiling via a transient cgroup scope: if the harvest balloons (e.g. an
+# accidental `st` embed backend, or a runaway source), it is killed inside its OWN
+# cgroup instead of triggering a global OOM that freezes the box. 1.5G is comfortable
+# headroom over the ~400 MB LSA peak; MemorySwapMax stops it eating all of zram.
+systemd-run --scope --quiet --collect -p MemoryMax=1.5G -p MemorySwapMax=512M \
+  timeout --signal=TERM --kill-after=60 "$TIMEOUT" \
   "$PROJECT/.venv/bin/python" -m aqueduct harvest --topics "$TOPICS" --limit "$LIMIT" >>"$LOG" 2>&1
 rc=$?
 [ "$rc" = 124 ] && echo "$(date -Is) harvest TIMED OUT after $TIMEOUT (watchdog killed it)" >>"$LOG"

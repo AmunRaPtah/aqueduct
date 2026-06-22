@@ -48,22 +48,38 @@ def _record(p: dict) -> dict:
     }
 
 
-def search(query: str, limit: int = 25, key: str | None = None) -> list[dict]:
-    """Text-search US patents by title/abstract. Needs an API key."""
+def search(query: str, limit: int = 25, key: str | None = None,
+           cursor: str | None = None) -> tuple[list[dict], str | None]:
+    """Text-search US patents by title/abstract. Needs an API key.
+
+    Returns ``(records, next_cursor)``. Pages with PatentsView's `after` cursor over a
+    stable `patent_id` sort, so each run resumes after the last patent the previous run
+    saw (paging deeper) rather than re-reading the same page. `next_cursor` is None at
+    end-of-results, signalling the caller to restart from the top next cycle.
+    """
     key = key or os.environ.get("PATENTSVIEW_API_KEY")
     if not key:
-        return []
+        return [], None
     q = {"_or": [{"_text_any": {"patent_title": query}},
                  {"_text_any": {"patent_abstract": query}}]}
+    size = min(limit, 1000)
+    opts: dict = {"size": size}
+    if cursor:
+        opts["after"] = [cursor]  # resume after the prior run's last patent_id
     params = urllib.parse.urlencode({
         "q": json.dumps(q),
         "f": json.dumps(FIELDS),
-        "o": json.dumps({"size": min(limit, 1000)}),
+        "s": json.dumps([{"patent_id": "asc"}]),  # stable sort enables cursor paging
+        "o": json.dumps(opts),
     })
     data = _get(f"{API}?{params}", key)
     if not data:
-        return []
-    return [_record(p) for p in data.get("patents", [])][:limit]
+        return [], None
+    raw = data.get("patents", [])
+    records = [_record(p) for p in raw][:limit]
+    # only more to fetch if the page came back full; else reset to the top next cycle
+    next_cursor = raw[-1].get("patent_id") if raw and len(raw) >= size else None
+    return records, next_cursor
 
 
 def parse(raw: str) -> dict:
@@ -80,14 +96,18 @@ def parse(raw: str) -> dict:
     return {"meta": r, "sections": sections}
 
 
-def ingest(query: str, limit: int = 25) -> Path:
-    """Land US patents (JSON) + a metadata manifest in the landing zone."""
+def ingest(query: str, limit: int = 25,
+           cursor: str | None = None) -> tuple[Path, str | None]:
+    """Land US patents (JSON) + a metadata manifest in the landing zone.
+
+    Resumes paging from `cursor` and returns ``(landing_dir, next_cursor)``.
+    """
     src_dir = config.raw_source_dir("patents")
     manifest = src_dir / "manifest.jsonl"
     if not os.environ.get("PATENTSVIEW_API_KEY"):
         print("[ingest]  patents: set PATENTSVIEW_API_KEY (free at patentsview.org) to enable. Skipping.")
-        return src_dir
-    records = search(query, limit=limit)
+        return src_dir, None
+    records, next_cursor = search(query, limit=limit, cursor=cursor)
     print(f"[ingest]  patents: {len(records)} patents for {query!r}")
 
     fetched_at = datetime.now(timezone.utc).isoformat()
@@ -106,4 +126,4 @@ def ingest(query: str, limit: int = 25) -> Path:
         })
     total, added = merge_jsonl(manifest, built, "pmcid")
     print(f"[ingest]  manifest +{added} new ({total} total) -> {manifest.relative_to(config.ROOT)}")
-    return src_dir
+    return src_dir, next_cursor

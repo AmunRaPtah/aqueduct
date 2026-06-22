@@ -51,10 +51,18 @@ def _flatten(study: dict) -> dict:
     }
 
 
-def search(query: str, limit: int = 100) -> list[dict]:
-    """Search trials by condition/term; returns flattened records."""
+def search(query: str, limit: int = 100,
+           cursor: str | None = None) -> tuple[list[dict], str | None]:
+    """Search trials by condition/term.
+
+    Returns ``(records, next_cursor)``: flattened records starting from `cursor` (the
+    `pageToken` a previous run left off at), plus the token to resume from next run —
+    so successive harvests page deeper instead of re-reading the first page.
+    `next_cursor` is None at end-of-results (caller resweeps from the top next cycle).
+    """
     out: list[dict] = []
-    token: str | None = None
+    token: str | None = cursor or None
+    next_cursor: str | None = None
     while len(out) < limit:
         page = min(200, limit - len(out))
         params = {"query.cond": query, "pageSize": page, "countTotal": "false"}
@@ -63,22 +71,28 @@ def search(query: str, limit: int = 100) -> list[dict]:
         data = _get(f"{API}?{urllib.parse.urlencode(params)}")
         studies = data.get("studies", [])
         if not studies:
+            next_cursor = None  # exhausted -> resweep next cycle
             break
         out.extend(_flatten(s) for s in studies)
         token = data.get("nextPageToken")
+        next_cursor = token
         if not token:
             break
         time.sleep(PAGE_DELAY)
-    return out[:limit]
+    return out[:limit], next_cursor
 
 
-def ingest(query: str, limit: int = 100) -> Path:
-    """Land ClinicalTrials.gov studies as JSONL in the structured landing zone."""
+def ingest(query: str, limit: int = 100,
+           cursor: str | None = None) -> tuple[Path, str | None]:
+    """Land ClinicalTrials.gov studies as JSONL in the structured landing zone.
+
+    Resumes paging from `cursor` and returns ``(landing_file, next_cursor)``.
+    """
     src_dir = config.raw_source_dir("clinicaltrials")
-    records = search(query, limit=limit)
+    records, next_cursor = search(query, limit=limit, cursor=cursor)
     out = src_dir / "trials.jsonl"
     fetched_at = datetime.now(timezone.utc).isoformat()
     recs = [{**r, "query": query, "fetched_at": fetched_at} for r in records]
     total, added = merge_jsonl(out, recs, "nct_id")
     print(f"[ingest]  clinicaltrials: +{added} new trials ({total} total) for {query!r} -> {out.relative_to(config.ROOT)}")
-    return out
+    return out, next_cursor
