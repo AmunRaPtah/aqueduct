@@ -130,7 +130,7 @@ def extract_pdf_text(arxiv_id: str) -> str | None:
     try:
         from pdfminer.high_level import extract_text
     except ImportError:  # pragma: no cover - environment dependent
-        raise RuntimeError("full text needs pdfminer.six: pip install -e '.[pdf]'")
+        raise RuntimeError("full text needs pdfminer.six: pip install -e '.[pdf]'") from None
     try:
         data = _cached_pdf(arxiv_id)
         text = extract_text(io.BytesIO(data)) or ""
@@ -202,7 +202,7 @@ def ingest(query: str, limit: int = 25, categories: list[str] | None = None,
             "pmcid": f"arXiv:{m['arxiv_id']}", "pmid": None, "doi": m["doi"],
             "title": m["title"], "journal": m["journal"], "pub_year": m["pub_year"],
             "authors": m["authors"], "source": "arxiv", "query": query,
-            "fetched_at": fetched_at, "xml_file": str(xml_path),
+            "fetched_at": fetched_at, "xml_file": config.rel_data_path(xml_path),
             "has_body": has_body,
             "abstract": m["abstract"], "mesh": None,
             "keywords": m["categories"], "grants": None, "cited_by": None,

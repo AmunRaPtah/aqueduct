@@ -9,7 +9,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7"]
+dev = ["pytest>=7", "ruff>=0.6"]
 st = ["sentence-transformers>=2.2"]  # optional 'st' embedding backend
 pdf = ["pdfminer.six>=20221105"]     # optional arXiv PDF full-text extraction
 
@@ -26,3 +26,11 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src", "tests"]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+# Real-bug rules: pyflakes (F), syntax (E9), bugbear (B), pyupgrade (UP).
+select = ["E9", "F", "B", "UP"]

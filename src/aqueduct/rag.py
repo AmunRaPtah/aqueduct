@@ -9,7 +9,7 @@ send a query string and get back grounded, citeable context.
 
 from __future__ import annotations
 
-from . import embeddings, links
+from . import embeddings
 from .storage import connect
 
 

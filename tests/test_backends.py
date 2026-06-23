@@ -124,7 +124,7 @@ def test_registry_dispatch_and_unknown():
     assert isinstance(embeddings.make_embedder("lsa", dims=4), embeddings.LsaEmbedder)
     try:
         embeddings.make_embedder("nope")
-        assert False, "expected ValueError"
+        raise AssertionError("expected ValueError")
     except ValueError:
         pass
 
@@ -157,6 +157,6 @@ def test_st_backend_lazy_import_message():
     except ImportError:
         try:
             emb.transform(["x"])
-            assert False, "expected RuntimeError"
+            raise AssertionError("expected RuntimeError")
         except RuntimeError as e:
             assert "sentence-transformers" in str(e)

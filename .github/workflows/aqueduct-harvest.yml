@@ -1,0 +1,69 @@
+name: aqueduct-harvest
+
+# Runs the aqueduct corpus harvest on GitHub Actions instead of the Contabo VPS
+# (the VPS build kept OOMing; Lightning drained free credits). Daily cadence —
+# the corpus is saturated, so daily is plenty and fits the 2000-min/mo quota.
+# State (data/: raw + warehouse) lives on OneDrive and is pulled/pushed via rclone.
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: per-source page size
+        default: '15'
+  schedule:
+    - cron: '0 5 * * *'   # daily 05:00 UTC
+
+concurrency:
+  group: aqueduct-harvest
+  cancel-in-progress: true
+
+jobs:
+  harvest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30          # bounds quota; runner has 16GB so the build won't OOM
+    env:
+      LIMIT: ${{ github.event.inputs.limit || '15' }}
+      NCBI_EMAIL: work@supercriticalbooks.com
+      OPENALEX_MAILTO: work@supercriticalbooks.com
+      AQUEDUCT_EMBED_BACKEND: lsa
+      AQUEDUCT_DB_MEMORY_LIMIT: 4GB
+      AQUEDUCT_DB_THREADS: '2'
+      RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+      AQUEDUCT_EMAIL_TO: ${{ secrets.AQUEDUCT_EMAIL_TO }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install rclone + package
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq rclone
+          python -m pip install -U pip
+          pip install -e .
+      - name: Restore secrets (rclone config + topics)
+        run: |
+          mkdir -p ~/.config/rclone
+          printf '%s' "${{ secrets.RCLONE_CONF }}" > ~/.config/rclone/rclone.conf
+          printf '%s' "${{ secrets.AQUEDUCT_TOPICS }}" > topics.json
+          chmod 600 ~/.config/rclone/rclone.conf
+      - name: Pull corpus state from OneDrive
+        run: |
+          mkdir -p data
+          rclone copy onedrive:aqueduct-state data --transfers 8 --onedrive-chunk-size 100M --stats 30s
+          du -sh data 2>/dev/null || true
+      - name: Harvest (fetch + build)
+        run: python -m aqueduct harvest --topics topics.json --limit "$LIMIT"
+      - name: Daily report email (best-effort)
+        continue-on-error: true
+        run: |
+          python -m aqueduct report > /tmp/report.txt 2>&1 || true
+          if [ -n "$RESEND_API_KEY" ] && [ -n "$AQUEDUCT_EMAIL_TO" ] && [ -s /tmp/report.txt ]; then
+            python3 -c "import json;print(json.dumps({'from':'Aqueduct <onboarding@resend.dev>','to':['$AQUEDUCT_EMAIL_TO'],'subject':'\U0001F4DA Aqueduct daily corpus report','text':open('/tmp/report.txt').read()[:90000]}))" > /tmp/r.json
+            curl -s -X POST https://api.resend.com/emails -H "Authorization: Bearer $RESEND_API_KEY" \
+                 -H "Content-Type: application/json" \
+                 -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120 Safari/537.36" \
+                 --data @/tmp/r.json >/dev/null || true
+          fi
+      - name: Push updated corpus state to OneDrive
+        run: rclone copy data onedrive:aqueduct-state --transfers 8 --onedrive-chunk-size 100M --stats 30s

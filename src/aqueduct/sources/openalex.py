@@ -128,7 +128,7 @@ def ingest(query: str, limit: int = 25,
             "pmcid": f"openalex:{doc_id}", "pmid": None, "doi": r["doi"],
             "title": r["title"], "journal": r["journal"], "pub_year": r["pub_year"],
             "authors": r["authors"], "source": "openalex", "query": query,
-            "fetched_at": fetched_at, "xml_file": str(json_path),
+            "fetched_at": fetched_at, "xml_file": config.rel_data_path(json_path),
             "has_body": False, "abstract": r["abstract"], "mesh": None,
             "keywords": r["concepts"], "grants": None, "cited_by": r["cited_by"],
         })

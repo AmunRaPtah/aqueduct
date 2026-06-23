@@ -98,7 +98,7 @@ def store_documents(con: duckdb.DuckDBPyConnection | None = None) -> int:
                 if not line.strip():
                     continue
                 rec = json.loads(line)
-                xml_path = Path(rec["xml_file"])
+                xml_path = config.resolve_data_path(rec["xml_file"])
                 if not xml_path.exists():
                     continue
                 year = rec.get("pub_year")
@@ -328,7 +328,7 @@ def report(con: duckdb.DuckDBPyConnection | None = None) -> None:
         print(f"Documents: {d[0]}  (full-text: {d[1]})   Journals: {d[2]}")
         print(f"Sections:  {s[0]}   Words: {s[1] or 0:,}   Chunks: {c}\n")
         print("-- Documents by year --")
-        for yr, n, w in con.execute(
+        for yr, n, _w in con.execute(
             "SELECT pub_year, count(*), sum(LENGTH(raw_xml)) FROM documents_raw "
             "GROUP BY pub_year ORDER BY pub_year DESC"
         ).fetchall():

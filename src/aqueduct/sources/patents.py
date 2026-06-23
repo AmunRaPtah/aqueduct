@@ -120,7 +120,7 @@ def ingest(query: str, limit: int = 25,
             "pmcid": f"patent:US{pid}", "pmid": None, "doi": None,
             "title": r["title"], "journal": r["assignees"], "pub_year": r["pub_year"],
             "authors": r["assignees"], "source": "patents", "query": query,
-            "fetched_at": fetched_at, "xml_file": str(json_path),
+            "fetched_at": fetched_at, "xml_file": config.rel_data_path(json_path),
             "has_body": False, "abstract": r["abstract"], "mesh": None,
             "keywords": r["keywords"], "grants": None, "cited_by": None,
         })

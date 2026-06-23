@@ -138,7 +138,7 @@ def ingest(query: str, limit: int = 25,
         has_body = "<body>" in xml
         built.append({
             **rec, "source": "europepmc", "query": query, "fetched_at": fetched_at,
-            "xml_file": str(xml_path), "has_body": has_body,
+            "xml_file": config.rel_data_path(xml_path), "has_body": has_body,
         })
         print(f"  [{i}/{len(records)}] {pmcid} {'full-text' if has_body else 'abstract-only'} -> {xml_path.name}")
         time.sleep(EFETCH_DELAY)

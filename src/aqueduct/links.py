@@ -432,7 +432,7 @@ def explore(drug: str, con: duckdb.DuckDBPyConnection | None = None) -> None:
             "SELECT count(*) FROM link_drug_document WHERE drug_norm=? AND confidence='weak'", [norm]
         ).fetchone()[0]
         print(f"\nPapers — strong ({len(papers)} shown; {weak} weak co-mentions hidden):")
-        for pmcid, source, in_meta, n_body, conf, title in papers:
+        for pmcid, source, in_meta, n_body, _conf, title in papers:
             where = "metadata" if in_meta else f"body×{n_body}"
             print(f"  {pmcid} [{source}] ({where})  {(title or '')[:52]}")
 

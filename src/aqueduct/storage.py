@@ -36,6 +36,8 @@ def connect(retries: int = 8, wait: float = 4.0) -> duckdb.DuckDBPyConnection:
     # Spill to disk under the data dir (not CWD) when the memory cap is hit.
     cfg = {"memory_limit": _DB_MEMORY_LIMIT, "threads": _DB_THREADS,
            "temp_directory": str(config.DATA_DIR / ".duckdb_tmp")}
+    if retries < 1:
+        retries = 1
     last: Exception | None = None
     for _ in range(retries):
         try:

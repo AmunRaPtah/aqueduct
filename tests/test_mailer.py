@@ -60,6 +60,6 @@ def test_send_requires_key(monkeypatch):
     monkeypatch.delenv("RESEND_API_KEY", raising=False)
     try:
         mailer.send("s", "m", to="x@y.com")
-        assert False
+        raise AssertionError("expected MailUnavailable")
     except mailer.MailUnavailable:
         pass

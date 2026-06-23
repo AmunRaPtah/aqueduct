@@ -12,7 +12,6 @@ If no LLM credentials are present, a facts-only report is still produced (no tok
 
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import tempfile
@@ -48,7 +47,7 @@ def _snippets(topic: str, k: int = 8, con=None) -> tuple[str, list[tuple]]:
     if not hits:
         return "", []
     lines, cites = [], []
-    for pmcid, cid, score in hits:
+    for pmcid, cid, _score in hits:
         row = con.execute(
             "SELECT d.title, c.text FROM doc_chunks c JOIN documents_raw d USING (pmcid) "
             "WHERE c.pmcid=? AND c.chunk_id=?", [pmcid, cid]).fetchone()
@@ -122,7 +121,7 @@ def _agentic(sheet: str, snippets: str, topic: str | None, max_turns: int = 12) 
         f"facts. Output ONLY the memo. Never invent numbers.")
     cmd = ["claude", "-p", task, "--model", cfg["pro"], "--max-turns", str(max_turns),
            "--add-dir", str(sandbox),
-           "--allowedTools", "Read", f"Bash(python {qpy.name}:*)", f"Bash(echo:*)"]
+           "--allowedTools", "Read", f"Bash(python {qpy.name}:*)", "Bash(echo:*)"]
     try:
         r = subprocess.run(cmd, cwd=sandbox, env=env, capture_output=True,
                            text=True, timeout=420)

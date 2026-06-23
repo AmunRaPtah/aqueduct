@@ -8,7 +8,6 @@ All queries are guarded by table presence, so partial corpora still work.
 
 from __future__ import annotations
 
-import duckdb
 
 from .storage import connect
 

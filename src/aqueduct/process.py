@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import duckdb
 
-from . import config
 from .storage import connect
 
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from aqueduct import corpus, documents
+from aqueduct import corpus
 from aqueduct.sources import openalex, patents
 
 
@@ -40,7 +40,6 @@ def test_patents_no_key_is_graceful(env):
 
 
 def test_openalex_flows_through_document_pipeline(con, env):
-    import seed
     from aqueduct import config
     # simulate an ingested OpenAlex work landing in the corpus
     d = config.raw_source_dir("openalex")

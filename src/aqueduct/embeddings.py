@@ -53,7 +53,7 @@ class Embedder:
     name = "base"
     needs_fit = True
 
-    def fit(self, texts: list[str]) -> "Embedder":
+    def fit(self, texts: list[str]) -> Embedder:
         return self
 
     def transform(self, texts: list[str]) -> np.ndarray:  # pragma: no cover - abstract
@@ -63,7 +63,7 @@ class Embedder:
         raise NotImplementedError
 
     @classmethod
-    def from_state(cls, state: dict) -> "Embedder":  # pragma: no cover - abstract
+    def from_state(cls, state: dict) -> Embedder:  # pragma: no cover - abstract
         raise NotImplementedError
 
 
@@ -88,7 +88,7 @@ class LsaEmbedder(Embedder):
         self.components: np.ndarray | None = None  # (terms, k) term loadings V_k
 
     # --- fit / transform ---------------------------------------------------
-    def fit(self, texts: list[str]) -> "LsaEmbedder":
+    def fit(self, texts: list[str]) -> LsaEmbedder:
         doc_tokens = [_tokens(t) for t in texts]
         df: dict[str, int] = {}
         for toks in doc_tokens:
@@ -133,7 +133,7 @@ class LsaEmbedder(Embedder):
         m *= self.idf
         return m
 
-    def _tfidf_sparse(self, doc_tokens: list[list[str]]) -> "_CsrMatrix":
+    def _tfidf_sparse(self, doc_tokens: list[list[str]]) -> _CsrMatrix:
         """Same weighting as `_tfidf_matrix` (count → log1p → ×idf) in CSR form."""
         indptr = np.empty(len(doc_tokens) + 1, dtype=np.int64)
         indptr[0] = 0
@@ -159,7 +159,7 @@ class LsaEmbedder(Embedder):
                 "idf": self.idf.tolist(), "components": self.components.tolist()}
 
     @classmethod
-    def from_state(cls, state: dict) -> "LsaEmbedder":
+    def from_state(cls, state: dict) -> LsaEmbedder:
         e = cls(dims=state["dims"])
         e.vocab = state["vocab"]
         e.idf = np.array(state["idf"])
@@ -211,7 +211,7 @@ class SentenceTransformerEmbedder(Embedder):
         return {"model": self.model_name}
 
     @classmethod
-    def from_state(cls, state: dict) -> "SentenceTransformerEmbedder":
+    def from_state(cls, state: dict) -> SentenceTransformerEmbedder:
         return cls(model=state.get("model", "all-MiniLM-L6-v2"))
 
 
@@ -253,7 +253,7 @@ class _CsrMatrix:
         self._block = block
 
     @property
-    def T(self) -> "_CsrT":
+    def T(self) -> _CsrT:
         return _CsrT(self)
 
     def __matmul__(self, X: np.ndarray) -> np.ndarray:
@@ -355,7 +355,7 @@ def _hash(text: str) -> str:
 
 def _corpus_hash(rows, hashes) -> str:
     """A stable fingerprint of the chunk corpus (ids + content hashes)."""
-    return _hash("".join(f"{r[0]}:{r[1]}:{h}" for r, h in zip(rows, hashes)))
+    return _hash("".join(f"{r[0]}:{r[1]}:{h}" for r, h in zip(rows, hashes, strict=True)))
 
 
 def build_index(con=None, backend: str = "auto", dims: int = 128,
@@ -442,7 +442,7 @@ def _load_reusable(idx_path, backend: str):
         if "hashes" not in data:
             return None
         return {(str(p), int(c)): (data["vectors"][i], str(data["hashes"][i]))
-                for i, (p, c) in enumerate(zip(data["pmcid"], data["chunk_id"]))}
+                for i, (p, c) in enumerate(zip(data["pmcid"], data["chunk_id"], strict=True))}
     except Exception:  # noqa: BLE001 - any issue -> full rebuild
         return None
 
@@ -451,7 +451,7 @@ def _embed_incremental(emb, texts, hashes, rows, prev) -> tuple[np.ndarray, int]
     """Reuse vectors for unchanged (pmcid, chunk_id, hash); embed only the rest."""
     n = len(rows)
     todo_idx, todo_texts, reuse = [], [], {}
-    for i, (r, h) in enumerate(zip(rows, hashes)):
+    for i, (r, h) in enumerate(zip(rows, hashes, strict=True)):
         hit = prev.get((str(r[0]), int(r[1])))
         if hit is not None and hit[1] == h:
             reuse[i] = hit[0]

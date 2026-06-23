@@ -12,7 +12,7 @@ import json
 import random
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Iterator
+from collections.abc import Iterator
 
 from . import config
 
