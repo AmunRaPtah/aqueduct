@@ -14,8 +14,12 @@
     "arxiv": [
       "neural engineering brain computer interface",
       "computational models of addiction"
-    ]
+    ],
+    "surechembl": [""],
+    "epo_ops": [],
+    "google_patents": []
   },
+  "_patents_comment": "Patent sources (all land into 'documents'). surechembl is KEYLESS (EMBL-EBI chemical patents): empty string '' enriches from the ChEMBL/PubChem compounds already landed -> the patents disclosing them (one ~7-8 min remote Parquet join per run, capped by SURECHEMBL_MAX_PATENTS). epo_ops needs EPO_OPS_KEY+EPO_OPS_SECRET (free at developers.epo.org); google_patents needs the `bq` CLI + a GCP project; patents needs PATENTSVIEW_API_KEY. Add queries to epo_ops/google_patents (and a key) to enable them.",
   "structured": {
     "chembl": ["opioid", "stimulant"],
     "clinicaltrials": ["opioid use disorder", "addiction"],

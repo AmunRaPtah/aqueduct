@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 from . import documents
-from .sources import arxiv, europepmc, openalex, patents
+from .sources import (arxiv, epo_ops, europepmc, google_patents, openalex,
+                      patents, surechembl)
 from .storage import connect
 
 INGESTORS = {
     "europepmc": europepmc.ingest,
     "arxiv": arxiv.ingest,
     "openalex": openalex.ingest,
-    "patents": patents.ingest,
+    "patents": patents.ingest,            # USPTO / PatentsView (needs PATENTSVIEW_API_KEY)
+    "surechembl": surechembl.ingest,      # EMBL-EBI chemical patents (keyless)
+    "epo_ops": epo_ops.ingest,            # EPO worldwide (needs EPO_OPS_KEY/SECRET)
+    "google_patents": google_patents.ingest,  # BigQuery public data (needs bq)
 }
 
 

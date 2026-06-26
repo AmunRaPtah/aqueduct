@@ -18,7 +18,8 @@ from pathlib import Path
 import duckdb
 
 from . import config, jats
-from .sources import arxiv, openalex, patents
+from .sources import (arxiv, epo_ops, google_patents, openalex, patents,
+                      surechembl)
 from .storage import connect
 
 # Chunking is configurable via env (so a deploy can tune retrieval granularity
@@ -65,6 +66,9 @@ PARSERS = {
     "arxiv": arxiv.parse_atom,      # Atom XML
     "openalex": openalex.parse,     # OpenAlex JSON
     "patents": patents.parse,       # PatentsView JSON
+    "surechembl": surechembl.parse,        # SureChEMBL patent JSON
+    "epo_ops": epo_ops.parse,              # EPO OPS patent JSON
+    "google_patents": google_patents.parse,  # Google Patents (BigQuery) JSON
 }
 
 
@@ -131,7 +135,8 @@ def store_documents(con: duckdb.DuckDBPyConnection | None = None) -> int:
 # Preferred source per shared paper (lower = kept as the cluster's primary row).
 # Europe PMC first (full text + MeSH), then OpenAlex, arXiv, patents.
 _SOURCE_RANK = "CASE source WHEN 'europepmc' THEN 0 WHEN 'openalex' THEN 1 " \
-               "WHEN 'arxiv' THEN 2 WHEN 'patents' THEN 3 ELSE 9 END"
+               "WHEN 'arxiv' THEN 2 WHEN 'patents' THEN 3 WHEN 'surechembl' THEN 4 " \
+               "WHEN 'epo_ops' THEN 5 WHEN 'google_patents' THEN 6 ELSE 9 END"
 
 
 def build_clusters(con: duckdb.DuckDBPyConnection | None = None) -> dict[str, int]:

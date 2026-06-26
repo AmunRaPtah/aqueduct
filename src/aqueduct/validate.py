@@ -23,6 +23,9 @@ _ID_PATTERNS = {
     "arxiv": re.compile(r"^arXiv:.+", re.I),
     "openalex": re.compile(r"^(openalex:|https?://openalex\.org/)?W\d+$", re.I),
     "patents": re.compile(r".+"),  # patent numbers vary; just require non-empty
+    "surechembl": re.compile(r".+"),
+    "epo_ops": re.compile(r".+"),
+    "google_patents": re.compile(r".+"),
 }
 
 _YEAR_MIN, _YEAR_MAX = 1500, 2100  # sanity bounds for pub_year
