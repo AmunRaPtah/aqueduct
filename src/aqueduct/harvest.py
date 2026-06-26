@@ -180,7 +180,8 @@ def harvest(topics: dict, limit: int = 25, build: bool = True,
                 # Backend is env-selectable so an unattended, memory-tight box can pin
                 # the lean keyless LSA path (~400 MB, ~90 s) instead of the heavier
                 # 'auto' -> sentence-transformers default (~1.5 GB, slow full re-embeds).
-                embeddings.build_index(con, backend=os.environ.get("AQUEDUCT_EMBED_BACKEND", "auto"))
+                embeddings.build_index(con, backend=os.environ.get("AQUEDUCT_EMBED_BACKEND", "auto"),
+                                       model=os.environ.get("AQUEDUCT_EMBED_MODEL", "all-MiniLM-L6-v2"))
                 validate.validate(con)
                 if topics_path is not None:
                     try:
