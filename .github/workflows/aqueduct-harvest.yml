@@ -22,14 +22,12 @@ concurrency:
 jobs:
   harvest:
     runs-on: ubuntu-latest
-    timeout-minutes: 90          # headroom for the one-time full dense re-embed; steady-state
-                                 # runs are ~40 min (incremental embed), well under quota
+    timeout-minutes: 60          # bounds quota; runner has 16GB so the build won't OOM
     env:
       LIMIT: ${{ github.event.inputs.limit || '15' }}
       NCBI_EMAIL: work@supercriticalbooks.com
       OPENALEX_MAILTO: work@supercriticalbooks.com
-      AQUEDUCT_EMBED_BACKEND: st                              # dense biomedical embeddings
-      AQUEDUCT_EMBED_MODEL: pritamdeka/S-PubMedBert-MS-MARCO  # 768d, semantic-search tuned
+      AQUEDUCT_EMBED_BACKEND: lsa
       AQUEDUCT_DB_MEMORY_LIMIT: 4GB
       AQUEDUCT_DB_THREADS: '2'
       RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
@@ -40,17 +38,12 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
-      - name: Cache embedding model (HuggingFace)
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/huggingface
-          key: hf-s-pubmedbert-msmarco-v1
-      - name: Install rclone (latest) + package (with st extra)
+      - name: Install rclone (latest) + package
         run: |
           curl -fsSL https://rclone.org/install.sh | sudo bash
           rclone version
           python -m pip install -U pip
-          pip install -e '.[st]'
+          pip install -e .
       - name: Restore secrets (rclone config + topics)
         env:
           RCLONE_CONF: ${{ secrets.RCLONE_CONF }}
