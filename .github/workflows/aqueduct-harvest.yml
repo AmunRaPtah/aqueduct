@@ -3,7 +3,9 @@ name: aqueduct-harvest
 # Runs the aqueduct corpus harvest on GitHub Actions instead of the Contabo VPS
 # (the VPS build kept OOMing; Lightning drained free credits). Daily cadence —
 # the corpus is saturated, so daily is plenty and fits the 2000-min/mo quota.
-# State (data/: raw + warehouse) lives on OneDrive and is pulled/pushed via rclone.
+# State (data/: raw + warehouse) is stored as a single state.tgz archive on
+# OneDrive and pulled/pushed via rclone — one object instead of ~2k small files,
+# whose per-file Graph API overhead otherwise blew the 30-min job cap.
 on:
   workflow_dispatch:
     inputs:
@@ -20,7 +22,7 @@ concurrency:
 jobs:
   harvest:
     runs-on: ubuntu-latest
-    timeout-minutes: 30          # bounds quota; runner has 16GB so the build won't OOM
+    timeout-minutes: 45          # bounds quota; runner has 16GB so the build won't OOM
     env:
       LIMIT: ${{ github.event.inputs.limit || '15' }}
       NCBI_EMAIL: work@supercriticalbooks.com
@@ -53,7 +55,11 @@ jobs:
       - name: Pull corpus state from OneDrive
         run: |
           mkdir -p data
-          rclone copy onedrive:aqueduct-state data --transfers 8 --onedrive-chunk-size 100M --stats 30s
+          if rclone copyto onedrive:aqueduct-state/state.tgz state.tgz --onedrive-chunk-size 100M --stats 30s; then
+            tar -xzf state.tgz -C data && rm -f state.tgz
+          else
+            echo "No state.tgz on OneDrive yet — starting from an empty data/"
+          fi
           du -sh data 2>/dev/null || true
       - name: Harvest (fetch + build)
         run: python -m aqueduct harvest --topics topics.json --limit "$LIMIT"
@@ -69,4 +75,6 @@ jobs:
                  --data @/tmp/r.json >/dev/null || true
           fi
       - name: Push updated corpus state to OneDrive
-        run: rclone copy data onedrive:aqueduct-state --transfers 8 --onedrive-chunk-size 100M --stats 30s
+        run: |
+          tar -czf state.tgz -C data --exclude='*.wal' .
+          rclone copyto state.tgz onedrive:aqueduct-state/state.tgz --onedrive-chunk-size 100M --stats 30s
