@@ -38,9 +38,10 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
-      - name: Install rclone + package
+      - name: Install rclone (latest) + package
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq rclone
+          curl -fsSL https://rclone.org/install.sh | sudo bash
+          rclone version
           python -m pip install -U pip
           pip install -e .
       - name: Restore secrets (rclone config + topics)
