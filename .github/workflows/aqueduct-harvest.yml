@@ -22,7 +22,7 @@ concurrency:
 jobs:
   harvest:
     runs-on: ubuntu-latest
-    timeout-minutes: 45          # bounds quota; runner has 16GB so the build won't OOM
+    timeout-minutes: 60          # bounds quota; runner has 16GB so the build won't OOM
     env:
       LIMIT: ${{ github.event.inputs.limit || '15' }}
       NCBI_EMAIL: work@supercriticalbooks.com
