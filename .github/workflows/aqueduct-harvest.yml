@@ -37,6 +37,13 @@ jobs:
       AQUEDUCT_DB_THREADS: '2'
       RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
       AQUEDUCT_EMAIL_TO: ${{ secrets.AQUEDUCT_EMAIL_TO }}
+      # DeepSeek (real HTTP API) so the daily report writes an LLM strategy memo
+      # instead of a facts-only dump. Model MUST be a real deepseek.com id
+      # (deepseek-chat) — the default 'deepseek-v4-pro' is a local proxy alias that
+      # 404s against api.deepseek.com.
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      DEEPSEEK_BASE_URL: https://api.deepseek.com/anthropic
+      DEEPSEEK_MODEL: deepseek-chat
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -72,9 +79,14 @@ jobs:
       - name: Daily report email (best-effort)
         continue-on-error: true
         run: |
-          python -m aqueduct report > /tmp/report.txt 2>&1 || true
-          if [ -n "$RESEND_API_KEY" ] && [ -n "$AQUEDUCT_EMAIL_TO" ] && [ -s /tmp/report.txt ]; then
-            python3 -c "import json;print(json.dumps({'from':'Aqueduct <onboarding@resend.dev>','to':['$AQUEDUCT_EMAIL_TO'],'subject':'\U0001F4DA Aqueduct daily corpus report','text':open('/tmp/report.txt').read()[:90000]}))" > /tmp/r.json
+          # `report` writes the markdown to data/reports/<stamp>_landscape.md and only
+          # LOGS the path to stdout — so email the generated FILE, not stdout (which
+          # previously sent just the one-line "[report] ... -> path" log message).
+          python -m aqueduct report || true
+          REPORT=$(ls -t data/reports/*.md 2>/dev/null | head -1)
+          echo "emailing report file: ${REPORT:-<none>}"
+          if [ -n "$RESEND_API_KEY" ] && [ -n "$AQUEDUCT_EMAIL_TO" ] && [ -s "$REPORT" ]; then
+            REPORT="$REPORT" python3 -c "import json,os;print(json.dumps({'from':'Aqueduct <onboarding@resend.dev>','to':['$AQUEDUCT_EMAIL_TO'],'subject':'\U0001F4DA Aqueduct daily corpus report','text':open(os.environ['REPORT']).read()[:90000]}))" > /tmp/r.json
             curl -s -X POST https://api.resend.com/emails -H "Authorization: Bearer $RESEND_API_KEY" \
                  -H "Content-Type: application/json" \
                  -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120 Safari/537.36" \
