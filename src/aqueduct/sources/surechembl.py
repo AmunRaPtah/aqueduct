@@ -96,7 +96,7 @@ def search(inchikeys: list[str], limit: int = MAX_PATENTS) -> list[dict]:
           LIMIT {int(limit)}
         """
         cols = ["patent_number", "country", "title", "publication_date", "cpc", "assignee"]
-        return [dict(zip(cols, row)) for row in con.execute(sql).fetchall()]
+        return [dict(zip(cols, row, strict=False)) for row in con.execute(sql).fetchall()]
     finally:
         con.close()
 
