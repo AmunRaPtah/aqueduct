@@ -92,6 +92,14 @@ jobs:
                  -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120 Safari/537.36" \
                  --data @/tmp/r.json >/dev/null || true
           fi
+      - name: Publish latest memo for consumers (Pardalos research desk)
+        continue-on-error: true
+        run: |
+          REPORT=$(ls -t data/reports/*.md 2>/dev/null | head -1)
+          if [ -s "$REPORT" ]; then
+            rclone copyto "$REPORT" onedrive:aqueduct-state/latest_report.md --stats=0
+            echo "published $REPORT -> onedrive:aqueduct-state/latest_report.md"
+          fi
       - name: Push updated corpus state to OneDrive
         run: |
           tar -czf state.tgz -C data --exclude='*.wal' .

@@ -148,6 +148,9 @@ class RateLimiter:
 
 # the shared limiter every connector funnels through
 LIMITER = RateLimiter()
+# arXiv asks for ~3s between API hits; without this the harvest's rapid-fire
+# queries trip a 429 that opens the circuit and skips the rest of the run.
+LIMITER.intervals["export.arxiv.org"] = 3.0
 
 
 def _host(url: str) -> str:

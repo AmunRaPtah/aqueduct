@@ -51,7 +51,11 @@ echo "=== $(date -Is) harvest start (topics=$TOPICS limit=$LIMIT) ===" >>"$LOG"
 # Bumped RAM ceiling to 2G and swap allowance to 2G so it spills to (compressed zram)
 # swap and FINISHES, while still capped well below box limits. MemoryMax keeps real
 # RAM bounded; MemorySwapMax stops it eating the whole swap pool.
-systemd-run --scope --quiet --collect -p MemoryMax=2G -p MemorySwapMax=2G \
+# 2026-07-04 (post-wipe rebuild): this box has NO swap configured (Swap: 0B), so the
+# 2G+2G RAM/swap design could not spill and was SIGKILLed (exit 137) at ~2.1G every run.
+# Give it the full 2G+2G working-set budget as real RAM (4G) instead — box has ~7.8G,
+# so 4G is still safely below box limits. If swap is later restored, MemorySwapMax reapplies.
+systemd-run --scope --quiet --collect -p MemoryMax=4G -p MemorySwapMax=2G \
   timeout --signal=TERM --kill-after=60 "$TIMEOUT" \
   "$PROJECT/.venv/bin/python" -m aqueduct harvest --topics "$TOPICS" --limit "$LIMIT" >>"$LOG" 2>&1
 rc=$?
