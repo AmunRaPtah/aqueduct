@@ -53,10 +53,14 @@ def seed_document(pmcid="PMC1", *, title="Fentanyl pharmacology",
     xml = build_jats(title, abstract, sections)
     xmlp = d / f"{pmcid.replace(':', '_')}.xml"
     xmlp.write_text(xml, encoding="utf-8")
+    # Only europepmc lands parseable JATS full text here; other sources are
+    # abstract/metadata-only in this helper, so has_body must reflect that or the
+    # ingest gate will (correctly) quarantine them as body-less full-text.
+    has_body = source == "europepmc"
     rec = {
         "pmcid": pmcid, "pmid": None, "doi": doi, "title": title,
         "journal": "Test Journal", "pub_year": 2025, "authors": "Doe J",
-        "source": source, "query": "test", "fetched_at": _NOW, "has_body": True,
+        "source": source, "query": "test", "fetched_at": _NOW, "has_body": has_body,
         "abstract": abstract, "mesh": mesh, "keywords": keywords,
         "grants": None, "cited_by": 3, "xml_file": str(xmlp),
     }

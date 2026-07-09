@@ -13,11 +13,12 @@ from __future__ import annotations
 import json
 import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 import duckdb
 
-from . import config, jats
+from . import config, jats, obs, quality
 from .sources import (arxiv, epo_ops, google_patents, openalex, patents,
                       surechembl)
 from .storage import connect
@@ -80,8 +81,28 @@ def _iter_manifests() -> list[Path]:
     return sorted(config.RAW_DIR.glob("*/manifest.jsonl"))
 
 
+def _body_words(source: str, xml: str) -> int:
+    """Parsed body length for the quality gate — 0 if the doc fails to parse.
+
+    Uses the same per-source parser the silver stage does; a `has_body` doc that
+    yields no body words is a broken/truncated fetch and gets quarantined upstream.
+    """
+    parse = PARSERS.get(source, jats.parse_jats)
+    try:
+        parsed = parse(xml)
+    except Exception:  # noqa: BLE001 - an unparseable doc simply has zero body words
+        return 0
+    return sum(len(s["text"].split()) for s in parsed.get("sections", [])
+               if s.get("sec_type") == "body")
+
+
 def store_documents(con: duckdb.DuckDBPyConnection | None = None) -> int:
-    """Load landing-zone XML + metadata into `documents_raw`. Returns row count."""
+    """Load landing-zone XML + metadata into `documents_raw`. Returns row count.
+
+    Every candidate passes the ingest-time quality gate first: accepted docs land in
+    `documents_raw`, rejected docs are quarantined in `documents_rejected` with the
+    failing reason(s) — so breadth grows without garbage entering the corpus.
+    """
     owns = con is None
     con = con or connect()
     try:
@@ -96,7 +117,18 @@ def store_documents(con: duckdb.DuckDBPyConnection | None = None) -> int:
             )
             """
         )
+        con.execute(
+            """
+            CREATE OR REPLACE TABLE documents_rejected (
+                pmcid TEXT, source TEXT, doi TEXT, title TEXT,
+                reasons TEXT, checks TEXT, query TEXT, fetched_at TEXT, rejected_at TEXT
+            )
+            """
+        )
+        now = datetime.now(timezone.utc).isoformat()
         rows = 0
+        rejected = 0
+        reasons_tally: dict[str, int] = {}
         for manifest in _iter_manifests():
             for line in manifest.read_text().splitlines():
                 if not line.strip():
@@ -104,6 +136,21 @@ def store_documents(con: duckdb.DuckDBPyConnection | None = None) -> int:
                 rec = json.loads(line)
                 xml_path = config.resolve_data_path(rec["xml_file"])
                 if not xml_path.exists():
+                    continue
+                xml = xml_path.read_text(encoding="utf-8")
+                verdict = quality.check_document(
+                    rec, body_words=_body_words(rec.get("source"), xml))
+                if not verdict.ok:
+                    con.execute(
+                        "INSERT INTO documents_rejected VALUES (?,?,?,?,?,?,?,?,?)",
+                        [rec.get("pmcid"), rec.get("source"), rec.get("doi"),
+                         rec.get("title"), ";".join(verdict.reasons),
+                         json.dumps(verdict.checks), rec.get("query"),
+                         rec.get("fetched_at"), now],
+                    )
+                    rejected += 1
+                    for r in verdict.reasons:
+                        reasons_tally[r] = reasons_tally.get(r, 0) + 1
                     continue
                 year = rec.get("pub_year")
                 cited = rec.get("cited_by")
@@ -117,12 +164,18 @@ def store_documents(con: duckdb.DuckDBPyConnection | None = None) -> int:
                         rec.get("fetched_at"), rec.get("has_body"),
                         rec.get("abstract"), rec.get("mesh"), rec.get("keywords"),
                         rec.get("grants"), int(cited) if cited is not None else None,
-                        xml_path.read_text(encoding="utf-8"),
+                        xml,
                     ],
                 )
                 rows += 1
         total = con.execute("SELECT count(*) FROM documents_raw").fetchone()[0]
-        print(f"[store]   {rows} docs loaded -> documents_raw (bronze, {total} total)")
+        print(f"[store]   {rows} docs loaded -> documents_raw (bronze, {total} total)"
+              + (f"  |  {rejected} quarantined" if rejected else ""))
+        if reasons_tally:
+            top = ", ".join(f"{k}={v}" for k, v in
+                            sorted(reasons_tally.items(), key=lambda kv: -kv[1]))
+            print(f"[gate]    quarantine reasons: {top}")
+        obs.log("store.gate", accepted=rows, quarantined=rejected, reasons=reasons_tally)
         return rows
     finally:
         if owns:

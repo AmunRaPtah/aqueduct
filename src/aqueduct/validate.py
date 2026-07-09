@@ -87,9 +87,24 @@ def validate(con: duckdb.DuckDBPyConnection | None = None, *, verbose: bool = Tr
 
         n_docs = con.execute("SELECT count(*) FROM documents_raw").fetchone()[0]
         n_issues = sum(checks.values())
+        # Quarantine is healthy, not an issue: it's garbage the ingest gate kept OUT.
+        # Report it (with a reason breakdown) so growth-vs-rejection stays visible.
+        quarantined = 0
+        quarantine_reasons: dict[str, int] = {}
+        if "documents_rejected" in tables:
+            quarantined = con.execute(
+                "SELECT count(*) FROM documents_rejected").fetchone()[0]
+            for reasons, n in con.execute(
+                "SELECT reasons, count(*) FROM documents_rejected GROUP BY reasons"
+            ).fetchall():
+                for r in (reasons or "").split(";"):
+                    if r:
+                        quarantine_reasons[r] = quarantine_reasons.get(r, 0) + n
         report = {"checks": checks, "examples": examples, "ok": n_issues == 0,
-                  "n_documents": n_docs, "n_issues": n_issues}
-        obs.log("validate", n_documents=n_docs, n_issues=n_issues, checks=checks)
+                  "n_documents": n_docs, "n_issues": n_issues,
+                  "quarantined": quarantined, "quarantine_reasons": quarantine_reasons}
+        obs.log("validate", n_documents=n_docs, n_issues=n_issues, checks=checks,
+                quarantined=quarantined)
         if verbose:
             flagged = {k: v for k, v in checks.items() if v}
             if not flagged:
@@ -101,6 +116,11 @@ def validate(con: duckdb.DuckDBPyConnection | None = None, *, verbose: bool = Tr
                     ex = examples.get(name, [])
                     tail = f"  e.g. {', '.join(map(str, ex))}" if ex else ""
                     print(f"  {n:5}  {name}{tail}")
+            if quarantined:
+                top = ", ".join(f"{k}={v}" for k, v in
+                                sorted(quarantine_reasons.items(), key=lambda kv: -kv[1]))
+                print(f"[validate] {quarantined} doc(s) quarantined by the ingest gate"
+                      + (f" ({top})" if top else ""))
         return report
     finally:
         if owns:
