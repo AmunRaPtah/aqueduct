@@ -13,6 +13,7 @@ Auth: if AQUEDUCT_API_KEY is set, requests must send `Authorization: Bearer <key
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -70,7 +71,7 @@ def _authed(headers) -> bool:
     key = os.environ.get("AQUEDUCT_API_KEY")
     if not key:
         return True
-    return headers.get("Authorization", "") == f"Bearer {key}"
+    return hmac.compare_digest(headers.get("Authorization", ""), f"Bearer {key}")
 
 
 class _Handler(BaseHTTPRequestHandler):
