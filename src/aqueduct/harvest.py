@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import config, corpus, datasets, embeddings, links, obs, suggest, validate
+from .net import PermanentError
 from .sources import (bindingdb, chembl, clinicaltrials, ensembl, pdb, pubchem,
                       uniprot)
 from .storage import connect
@@ -36,6 +37,7 @@ from .storage import connect
 DATA_INGESTORS = {
     "chembl": chembl.ingest,
     "clinicaltrials": clinicaltrials.ingest,
+    "clinicaltrials_sponsor": clinicaltrials.ingest_sponsor,
     "uniprot": uniprot.ingest,
     "pdb": pdb.ingest,
     "pubchem": pubchem.ingest,
@@ -144,6 +146,16 @@ def _run(label: str, ingestors: dict, plan: dict, limit: int, state: dict, now: 
                 rec["last_ok"] = True
                 n += 1
                 obs.log("harvest.query", kind=label, source=source, query=q, ok=True)
+            except PermanentError as e:
+                # non-retryable (e.g. a rejected/expired pageToken): the saved cursor
+                # will never succeed again, so reset it instead of wedging this query
+                # into failing identically on every future run.
+                print(f"  ! {source} {q!r}: {e} (cursor reset)")
+                if paged:
+                    rec["cursor"] = None
+                rec["last_ok"] = False
+                obs.log("harvest.query", kind=label, source=source, query=q,
+                        ok=False, error_type=type(e).__name__, error=str(e), cursor_reset=paged)
             except Exception as e:  # noqa: BLE001 - one bad query shouldn't stop the run
                 print(f"  ! {source} {q!r}: {e}")
                 rec["last_ok"] = False
@@ -167,15 +179,29 @@ def harvest(topics: dict, limit: int = 25, build: bool = True,
     now = datetime.now(timezone.utc).isoformat()
     suggested: list[dict] = []
     with obs.span("harvest", limit=limit):
-        docs = _run("document", corpus.INGESTORS, topics.get("documents", {}), limit, state, now)
+        # Structured sources first: ~60 queries, mostly single-page REST calls,
+        # finishes in ~2 minutes. `documents` (europepmc/openalex/arxiv full-text
+        # fetches) is the slow, timeout-prone phase -- an OS-level wall-clock cap
+        # kills the whole process mid-run on a big topics file, so anything after
+        # it never happens. Running + building structured data FIRST means the
+        # cron's 45m timeout can only ever sacrifice the corpus/document rebuild,
+        # never the structured tables (chembl/clinicaltrials/uniprot/etc.).
         structs = _run("structured", DATA_INGESTORS, topics.get("structured", {}), limit, state, now)
+        _save_state(state)
+        if build:
+            con = connect()
+            try:
+                datasets.build(con)
+                validate.validate(con)
+            finally:
+                con.close()
+        docs = _run("document", corpus.INGESTORS, topics.get("documents", {}), limit, state, now)
         print(f"[harvest] ran {docs} document + {structs} structured queries")
         _save_state(state)
         if build:
             con = connect()
             try:
                 corpus.build(con)
-                datasets.build(con)
                 links.build(con)
                 # Backend is env-selectable so an unattended, memory-tight box can pin
                 # the lean keyless LSA path (~400 MB, ~90 s) instead of the heavier

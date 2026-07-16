@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from aqueduct import corpus, harvest
+from aqueduct.net import PermanentError
 from aqueduct.sources import bindingdb
 
 
@@ -62,3 +63,28 @@ def test_harvest_records_query_state_and_staleness(monkeypatch, env):
     future = datetime(2999, 1, 1, tzinfo=timezone.utc)
     stale = harvest.stale_queries(state, days=1, now=future)
     assert {(s, q) for s, q, _ in stale} == {("openalex", "q1"), ("chembl", "q2")}
+
+
+def test_harvest_resets_cursor_on_permanent_error(monkeypatch, env):
+    """A rejected/expired pageToken must not wedge a paginated query forever.
+
+    `_run` threads `cursor` in/out for ingestors that accept it (`clinicaltrials`
+    does). If the saved cursor causes a PermanentError (e.g. HTTP 400 on an expired
+    pageToken), the next run must retry from the top instead of repeating the same
+    dead cursor and failing identically forever.
+    """
+    state = harvest.load_state()
+    state["clinicaltrials\tq1"] = {"runs": 3, "last_run": None, "last_ok": True, "cursor": "stale-token"}
+    harvest._save_state(state)
+
+    def fake_ingest(q, limit=25, cursor=None):
+        assert cursor == "stale-token"
+        raise PermanentError("HTTP 400: bad pageToken", status=400)
+
+    monkeypatch.setitem(harvest.DATA_INGESTORS, "clinicaltrials", fake_ingest)
+
+    harvest.harvest({"structured": {"clinicaltrials": ["q1"]}}, build=False)
+
+    state = harvest.load_state()
+    assert state["clinicaltrials\tq1"]["cursor"] is None
+    assert state["clinicaltrials\tq1"]["last_ok"] is False

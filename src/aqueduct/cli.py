@@ -20,6 +20,7 @@ INGESTORS = {
 DATA_INGESTORS = {
     "chembl": chembl.ingest,
     "clinicaltrials": clinicaltrials.ingest,
+    "clinicaltrials_sponsor": clinicaltrials.ingest_sponsor,
     "uniprot": uniprot.ingest,
     "pdb": pdb.ingest,
     "pubchem": pubchem.ingest,

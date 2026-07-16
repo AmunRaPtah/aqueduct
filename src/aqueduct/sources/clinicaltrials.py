@@ -51,9 +51,13 @@ def _flatten(study: dict) -> dict:
     }
 
 
+#: which ClinicalTrials.gov v2 search field a harvest query targets.
+QUERY_FIELDS = {"cond": "query.cond", "lead": "query.lead"}
+
+
 def search(query: str, limit: int = 100,
-           cursor: str | None = None) -> tuple[list[dict], str | None]:
-    """Search trials by condition/term.
+           cursor: str | None = None, field: str = "cond") -> tuple[list[dict], str | None]:
+    """Search trials by condition/term (`field="cond"`) or lead sponsor (`field="lead"`).
 
     Returns ``(records, next_cursor)``: flattened records starting from `cursor` (the
     `pageToken` a previous run left off at), plus the token to resume from next run —
@@ -63,9 +67,10 @@ def search(query: str, limit: int = 100,
     out: list[dict] = []
     token: str | None = cursor or None
     next_cursor: str | None = None
+    param = QUERY_FIELDS[field]
     while len(out) < limit:
         page = min(200, limit - len(out))
-        params = {"query.cond": query, "pageSize": page, "countTotal": "false"}
+        params = {param: query, "pageSize": page, "countTotal": "false"}
         if token:
             params["pageToken"] = token
         data = _get(f"{API}?{urllib.parse.urlencode(params)}")
@@ -83,16 +88,27 @@ def search(query: str, limit: int = 100,
 
 
 def ingest(query: str, limit: int = 100,
-           cursor: str | None = None) -> tuple[Path, str | None]:
+           cursor: str | None = None, field: str = "cond") -> tuple[Path, str | None]:
     """Land ClinicalTrials.gov studies as JSONL in the structured landing zone.
 
     Resumes paging from `cursor` and returns ``(landing_file, next_cursor)``.
     """
     src_dir = config.raw_source_dir("clinicaltrials")
-    records, next_cursor = search(query, limit=limit, cursor=cursor)
+    records, next_cursor = search(query, limit=limit, cursor=cursor, field=field)
     out = src_dir / "trials.jsonl"
     fetched_at = datetime.now(timezone.utc).isoformat()
     recs = [{**r, "query": query, "fetched_at": fetched_at} for r in records]
     total, added = merge_jsonl(out, recs, "nct_id")
-    print(f"[ingest]  clinicaltrials: +{added} new trials ({total} total) for {query!r} -> {out.relative_to(config.ROOT)}")
+    print(f"[ingest]  clinicaltrials ({field}): +{added} new trials ({total} total) for {query!r} -> {out.relative_to(config.ROOT)}")
     return out, next_cursor
+
+
+def ingest_sponsor(query: str, limit: int = 100,
+                    cursor: str | None = None) -> tuple[Path, str | None]:
+    """Land trials led by `query` (a sponsor/company name) — see `ingest`.
+
+    Registered as the `clinicaltrials_sponsor` harvest source so `topics.json` can
+    seed coverage by company name, not just disease/condition term. Lands into the
+    same `trials.jsonl` (deduped by `nct_id`) as condition-based harvests.
+    """
+    return ingest(query, limit=limit, cursor=cursor, field="lead")
