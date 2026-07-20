@@ -22,9 +22,13 @@ concurrency:
 jobs:
   harvest:
     runs-on: ubuntu-latest
-    timeout-minutes: 60          # LSA rebuild over the whole corpus is fast (~minutes on
-                                 # 2 CPUs); this is ample headroom. (Was 350 for a PubMedBERT
-                                 # dense re-embed that could never finish in CI — see below.)
+    timeout-minutes: 120         # LSA rebuild over the whole corpus is fast (~minutes on
+                                 # 2 CPUs); this is ample headroom for that. (Was 350 for a
+                                 # PubMedBERT dense re-embed that could never finish in CI —
+                                 # see below.) Bumped 60 -> 120: the fetch phase itself now
+                                 # walks 270+ queries (topics.json + suggest's auto-generated
+                                 # companion file keeps growing it), which alone can exceed 60
+                                 # min — that's what killed the run on 2026-07-20.
     env:
       LIMIT: ${{ github.event.inputs.limit || '15' }}
       NCBI_EMAIL: work@supercriticalbooks.com
@@ -75,6 +79,11 @@ jobs:
           fi
           du -sh data 2>/dev/null || true
       - name: Harvest (fetch + build)
+        env:
+          PYTHONUNBUFFERED: '1'  # else stdout is block-buffered (not a tty) and the Actions
+                                 # log looks stuck for many minutes at a time, hiding real
+                                 # progress and making a genuine hang indistinguishable from
+                                 # slow-but-fine — as happened diagnosing the 2026-07-20 timeout.
         run: python -m aqueduct harvest --topics topics.json --limit "$LIMIT"
       - name: Daily report email (best-effort)
         continue-on-error: true
