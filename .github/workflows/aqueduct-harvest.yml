@@ -4,8 +4,10 @@ name: aqueduct-harvest
 # (the VPS build kept OOMing; Lightning drained free credits). Daily cadence —
 # the corpus is saturated, so daily is plenty and fits the 2000-min/mo quota.
 # State (data/: raw + warehouse) is stored as a single state.tgz archive on
-# OneDrive and pulled/pushed via rclone — one object instead of ~2k small files,
-# whose per-file Graph API overhead otherwise blew the 30-min job cap.
+# Google Drive and pulled/pushed via rclone — one object instead of ~2k small
+# files, whose per-file API overhead otherwise blew the 30-min job cap. Moved
+# off OneDrive 2026-07-21: that account's quota is shared with an unrelated
+# ~1TB media library and kept silently blocking state pushes when it filled up.
 on:
   workflow_dispatch:
     inputs:
@@ -69,13 +71,13 @@ jobs:
           printf '%s' "$RCLONE_CONF" > ~/.config/rclone/rclone.conf
           printf '%s' "$AQUEDUCT_TOPICS" > topics.json
           chmod 600 ~/.config/rclone/rclone.conf
-      - name: Pull corpus state from OneDrive
+      - name: Pull corpus state from Google Drive
         run: |
           mkdir -p data
-          if rclone copyto onedrive:aqueduct-state/state.tgz state.tgz --onedrive-chunk-size 100M --stats 30s; then
+          if rclone copyto gdrive4:aqueduct-state/state.tgz state.tgz --drive-chunk-size 64M --stats 30s; then
             tar -xzf state.tgz -C data && rm -f state.tgz
           else
-            echo "No state.tgz on OneDrive yet — starting from an empty data/"
+            echo "No state.tgz on Google Drive yet — starting from an empty data/"
           fi
           du -sh data 2>/dev/null || true
       - name: Harvest (fetch + build)
@@ -106,10 +108,10 @@ jobs:
         run: |
           REPORT=$(ls -t data/reports/*.md 2>/dev/null | head -1)
           if [ -s "$REPORT" ]; then
-            rclone copyto "$REPORT" onedrive:aqueduct-state/latest_report.md --stats=0
-            echo "published $REPORT -> onedrive:aqueduct-state/latest_report.md"
+            rclone copyto "$REPORT" gdrive4:aqueduct-state/latest_report.md --stats=0
+            echo "published $REPORT -> gdrive4:aqueduct-state/latest_report.md"
           fi
-      - name: Push updated corpus state to OneDrive
+      - name: Push updated corpus state to Google Drive
         run: |
           tar -czf state.tgz -C data --exclude='*.wal' .
-          rclone copyto state.tgz onedrive:aqueduct-state/state.tgz --onedrive-chunk-size 100M --stats 30s
+          rclone copyto state.tgz gdrive4:aqueduct-state/state.tgz --drive-chunk-size 64M --stats 30s
