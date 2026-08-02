@@ -25,8 +25,13 @@ TOPICS="${TOPICS:-$PROJECT/topics.json}"
 # efetch / PDF work → no more 45m timeouts) while the corpus still grows every hour.
 LIMIT="${LIMIT:-15}"
 # Hard wall-clock cap so a hung source (network/backoff) can never wedge the lock
-# past the next hourly run. Exit 124 = timed out. Kept under the 1h cron interval.
-TIMEOUT="${TIMEOUT:-45m}"
+# past the next run. Exit 124 = timed out. Cron here is daily (not hourly, despite
+# the old comment above) and flock already blocks overlap, so there's no reason to
+# cap this tighter than the corpus actually needs. 45m was killing every run before
+# a full pass finished (162 queries across 10 sources, incl. 240 europepmc hits/run,
+# far more than leviathan/prometheus's ~2 sources each). Bumped to 3h, still well
+# under the 24h cadence.
+TIMEOUT="${TIMEOUT:-3h}"
 LOG="$PROJECT/data/harvest.log"
 mkdir -p "$PROJECT/data"
 
