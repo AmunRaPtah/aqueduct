@@ -67,6 +67,22 @@ rc=$?
 [ "$rc" = 124 ] && echo "$(date -Is) harvest TIMED OUT after $TIMEOUT (watchdog killed it)" >>"$LOG"
 echo "=== $(date -Is) harvest done (exit $rc) ===" >>"$LOG"
 
+# Always resync the semantic index, even when the ingest above timed out.
+# `harvest` only reaches its own build_index call after the slow document-fetch
+# phase finishes. If the 3h watchdog kills it mid-ingest (as happened on every run
+# 2026-10-18..22), the index is silently left stale while doc_chunks keeps growing,
+# so every `rag`/`semantic` query then scores against months-old chunk ids and
+# returns nothing. This step runs unconditionally so the index always reflects
+# whatever chunks actually landed this run. `build_index` auto-skips (hashes
+# corpus) if nothing changed, so a clean run pays only a hash check, not a re-embed.
+echo "$(date -Is) post-harvest index resync (rc=$rc)" >>"$LOG"
+nice -n 19 ionice -c3 systemd-run --scope --quiet --collect -p MemoryMax=2G -p MemorySwapMax=2G \
+  timeout --signal=TERM --kill-after=30 10m \
+  "$PROJECT/.venv/bin/python" -m aqueduct corpus index --backend "$AQUEDUCT_EMBED_BACKEND" >>"$LOG" 2>&1
+irc=$?
+[ "$irc" = 124 ] && echo "$(date -Is) index resync TIMED OUT after 10m" >>"$LOG"
+echo "$(date -Is) index resync done (exit $irc)" >>"$LOG"
+
 # Keep the log bounded (last 5000 lines).
 tail -n 5000 "$LOG" > "$LOG.tmp" 2>/dev/null && mv "$LOG.tmp" "$LOG"
 exit $rc
